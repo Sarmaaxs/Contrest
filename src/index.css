@@ -1,0 +1,229 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer utilities {
+  .hide-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .hide-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .glass {
+    background: color-mix(in srgb, var(--accent-500) 6%, rgba(255, 255, 255, 0.04));
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid color-mix(in srgb, var(--accent-400) 18%, rgba(255, 255, 255, 0.08));
+  }
+  .glass-strong {
+    background: color-mix(in srgb, var(--accent-500) 10%, rgba(255, 255, 255, 0.07));
+    backdrop-filter: blur(28px);
+    -webkit-backdrop-filter: blur(28px);
+    border: 1px solid color-mix(in srgb, var(--accent-400) 22%, rgba(255, 255, 255, 0.1));
+  }
+  .glass-input {
+    background: color-mix(in srgb, var(--accent-500) 8%, rgba(255, 255, 255, 0.05));
+    border: 1px solid color-mix(in srgb, var(--accent-400) 20%, rgba(255, 255, 255, 0.1));
+    color: white;
+  }
+  .glass-input::placeholder {
+    color: rgb(115 115 115);
+  }
+  .glass-input:focus {
+    outline: none;
+    border-color: color-mix(in srgb, var(--accent-400) 55%, transparent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-500) 35%, transparent);
+  }
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color-scheme: dark;
+  --accent-400: #c084fc;
+  --accent-500: #a855f7;
+  --accent-600: #7c3aed;
+  --accent-soft: color-mix(in srgb, var(--accent-500) 22%, transparent);
+}
+
+html[data-accent='cyan'] {
+  --accent-400: #5ecbf5;
+  --accent-500: #2fb6e8;
+  --accent-600: #1a8fc4;
+}
+
+html[data-accent='white'] {
+  --accent-400: #f5f5f5;
+  --accent-500: #e5e5e5;
+  --accent-600: #a3a3a3;
+}
+
+html[data-accent='purple'] {
+  --accent-400: #c084fc;
+  --accent-500: #a855f7;
+  --accent-600: #7c3aed;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', sans-serif;
+  background-color: #050506;
+}
+
+/* Smooth water-like motion */
+button,
+a,
+input,
+textarea,
+.glass,
+.glass-strong {
+  transition:
+    background-color 0.25s ease,
+    border-color 0.25s ease,
+    color 0.2s ease,
+    transform 0.2s cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 0.25s ease,
+    opacity 0.2s ease;
+}
+
+button:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+* {
+  scrollbar-color: color-mix(in srgb, var(--accent-400) 35%, transparent) transparent;
+  scrollbar-width: thin;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--accent-400) 30%, transparent);
+  border-radius: 999px;
+}
+
+.app-glow-bg {
+  background:
+    radial-gradient(70% 55% at 12% -5%, color-mix(in srgb, var(--accent-500) 28%, transparent), transparent 55%),
+    radial-gradient(55% 45% at 100% 100%, color-mix(in srgb, var(--accent-400) 18%, transparent), transparent 55%),
+    radial-gradient(40% 30% at 50% 50%, color-mix(in srgb, var(--accent-600) 8%, transparent), transparent 70%),
+    #050506;
+  min-height: 100%;
+}
+
+.text-accent {
+  color: var(--accent-400) !important;
+}
+.bg-accent {
+  background-color: var(--accent-500) !important;
+}
+.bg-accent-grad {
+  background-image: linear-gradient(135deg, var(--accent-500), var(--accent-600)) !important;
+}
+.border-accent {
+  border-color: var(--accent-500) !important;
+}
+.shadow-accent {
+  box-shadow: 0 0 48px -8px color-mix(in srgb, var(--accent-400) 55%, transparent);
+}
+.shadow-accent-sm {
+  box-shadow: 0 0 24px -4px color-mix(in srgb, var(--accent-400) 45%, transparent);
+}
+.ring-story {
+  background: conic-gradient(from 180deg, var(--accent-400), #ec4899, var(--accent-600), var(--accent-400));
+}
+.ring-story-seen {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* Nav active uses accent */
+.nav-active {
+  color: var(--accent-400) !important;
+  background: color-mix(in srgb, var(--accent-500) 15%, transparent);
+}
+
+/* Soft sheet animation */
+@keyframes sheet-up {
+  from {
+    transform: translateY(12px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+.animate-sheet {
+  animation: sheet-up 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Double-tap-to-like heart burst (TikTok/IG style) */
+@keyframes heart-burst {
+  0% {
+    transform: scale(0.3);
+    opacity: 0;
+  }
+  25% {
+    transform: scale(1.15);
+    opacity: 1;
+  }
+  40% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 0;
+  }
+}
+.animate-heart-burst {
+  animation: heart-burst 0.7s ease-out forwards;
+}
+
+/* Pre-upload editor: dual-thumb trim slider (two overlapping <input type=range>) */
+.range-thumb-only {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  pointer-events: none;
+}
+.range-thumb-only::-webkit-slider-runnable-track {
+  background: transparent;
+  height: 100%;
+}
+.range-thumb-only::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  pointer-events: auto;
+  width: 16px;
+  height: 16px;
+  border-radius: 9999px;
+  background: white;
+  box-shadow: 0 0 0 3px var(--accent-500, #a855f7), 0 1px 3px rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+  margin-top: 0;
+}
+.range-thumb-only::-moz-range-track {
+  background: transparent;
+}
+.range-thumb-only::-moz-range-thumb {
+  pointer-events: auto;
+  width: 16px;
+  height: 16px;
+  border: none;
+  border-radius: 9999px;
+  background: white;
+  box-shadow: 0 0 0 3px var(--accent-500, #a855f7), 0 1px 3px rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+}
+
+/* Horizontal filter/tool rows without a visible scrollbar */
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
