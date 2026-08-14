@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Contrest — Maintenance</title>
+    <meta name="robots" content="noindex" />
+    <meta name="description" content="Contrest is temporarily offline for a scheduled upgrade." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Mono:wght@400&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg: #09090b;
+        --panel: #111116;
+        --line: rgba(255, 255, 255, 0.1);
+        --muted: #a1a1aa;
+        --text: #f4f4f5;
+        --accent: #a855f7;
+        --accent-soft: #c084fc;
+      }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      html, body {
+        height: 100%;
+        background: var(--bg);
+        color: var(--text);
+        font-family: "DM Sans", system-ui, sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      body {
+        min-height: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        overflow: hidden;
+        position: relative;
+      }
+      .bg {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 0;
+        background-image:
+          linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+          linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+        background-size: 64px 64px;
+        mask-image: radial-gradient(ellipse 70% 60% at 50% 40%, black 20%, transparent 75%);
+      }
+      .glow {
+        position: fixed;
+        width: 420px;
+        height: 420px;
+        left: 50%;
+        top: 38%;
+        transform: translate(-50%, -50%);
+        background: radial-gradient(circle, rgba(168, 85, 247, 0.14) 0%, transparent 68%);
+        pointer-events: none;
+        z-index: 0;
+        animation: glow-breathe 6s ease-in-out infinite;
+      }
+      @keyframes glow-breathe {
+        0%, 100% { opacity: 0.7; transform: translate(-50%, -50%) scale(1); }
+        50% { opacity: 1; transform: translate(-50%, -50%) scale(1.08); }
+      }
+      .wrap {
+        position: relative;
+        z-index: 1;
+        width: 100%;
+        max-width: 420px;
+        text-align: center;
+      }
+      .logo-stage {
+        position: relative;
+        width: 88px;
+        height: 88px;
+        margin: 0 auto 28px;
+      }
+      .logo {
+        width: 72px;
+        height: 72px;
+        border-radius: 18px;
+        background: linear-gradient(135deg, #7c3aed, #a855f7);
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+        z-index: 2;
+        display: grid;
+        place-items: center;
+        font-weight: 700;
+        font-size: 28px;
+        letter-spacing: -0.06em;
+        color: #fff;
+      }
+      .ring {
+        position: absolute;
+        inset: 0;
+        border-radius: 50%;
+        border: 1.5px solid rgba(168, 85, 247, 0.25);
+        animation: spin 10s linear infinite;
+      }
+      .ring::before {
+        content: "";
+        position: absolute;
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--accent-soft);
+        top: -3.5px;
+        left: 50%;
+        margin-left: -3.5px;
+        box-shadow: 0 0 12px rgba(192, 132, 252, 0.7);
+      }
+      .ring-delayed {
+        inset: -8px;
+        border-color: rgba(255, 255, 255, 0.08);
+        animation-duration: 16s;
+        animation-direction: reverse;
+      }
+      .ring-delayed::before {
+        width: 5px;
+        height: 5px;
+        background: rgba(255, 255, 255, 0.5);
+        box-shadow: none;
+        margin-left: -2.5px;
+        top: -2.5px;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      .kicker {
+        font-family: "Space Mono", ui-monospace, monospace;
+        font-size: 11px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--muted);
+        margin-bottom: 12px;
+      }
+      h1 {
+        font-size: clamp(1.5rem, 4vw, 1.85rem);
+        font-weight: 600;
+        letter-spacing: -0.04em;
+        line-height: 1.2;
+        margin-bottom: 12px;
+      }
+      .desc {
+        font-size: 0.95rem;
+        line-height: 1.65;
+        color: var(--muted);
+        margin-bottom: 28px;
+      }
+      .progress-wrap {
+        background: rgba(255, 255, 255, 0.06);
+        border-radius: 999px;
+        height: 4px;
+        overflow: hidden;
+        margin-bottom: 10px;
+      }
+      .progress-bar {
+        height: 100%;
+        width: 35%;
+        border-radius: 999px;
+        background: linear-gradient(90deg, var(--accent), var(--accent-soft));
+        animation: progress-slide 2.4s ease-in-out infinite;
+      }
+      @keyframes progress-slide {
+        0% { transform: translateX(-100%); }
+        50% { transform: translateX(180%); }
+        100% { transform: translateX(-100%); }
+      }
+      .status {
+        font-family: "Space Mono", ui-monospace, monospace;
+        font-size: 11px;
+        color: var(--muted);
+        margin-bottom: 32px;
+      }
+      .status span { color: var(--accent-soft); }
+      .card {
+        border: 1px solid var(--line);
+        background: rgba(17, 17, 22, 0.75);
+        border-radius: 14px;
+        padding: 16px 18px;
+        text-align: left;
+        margin-bottom: 24px;
+      }
+      .card p {
+        font-size: 0.8rem;
+        line-height: 1.55;
+        color: var(--muted);
+      }
+      .card strong {
+        color: var(--text);
+        font-weight: 500;
+      }
+      .links {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        justify-content: center;
+      }
+      .links a {
+        font-size: 0.8rem;
+        color: var(--muted);
+        text-decoration: none;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 8px 14px;
+        transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+      }
+      .links a:hover {
+        color: var(--text);
+        border-color: rgba(255, 255, 255, 0.22);
+        background: rgba(255, 255, 255, 0.04);
+      }
+      footer {
+        position: relative;
+        z-index: 1;
+        margin-top: 40px;
+        font-size: 12px;
+        color: #52525b;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .ring, .ring-delayed, .progress-bar, .glow { animation: none; }
+        .progress-bar { width: 50%; transform: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="bg" aria-hidden="true"></div>
+    <div class="glow" aria-hidden="true"></div>
+
+    <main class="wrap" role="status" aria-live="polite">
+      <div class="logo-stage" aria-hidden="true">
+        <div class="ring"></div>
+        <div class="ring ring-delayed"></div>
+        <div class="logo">C</div>
+      </div>
+
+      <p class="kicker">Scheduled maintenance</p>
+      <h1>We're upgrading Contrest</h1>
+      <p class="desc">
+        The app is temporarily offline while we ship improvements. Your account and content are
+        safe — please check back shortly.
+      </p>
+
+      <div class="progress-wrap" aria-hidden="true">
+        <div class="progress-bar"></div>
+      </div>
+      <p class="status"><span id="dots">Working</span> on the upgrade</p>
+
+      <div class="card">
+        <p>
+          <strong>What to expect</strong><br />
+          This usually takes a short while. If you need support in the meantime, reach us by email.
+        </p>
+      </div>
+
+      <div class="links">
+        <a href="mailto:supportsarmaxstream@gmail.com">Support email</a>
+        <a href="mailto:hezkiyastadese@gmail.com">Founders</a>
+      </div>
+    </main>
+
+    <footer>© <span id="year"></span> Contrest</footer>
+
+    <script>
+      document.getElementById("year").textContent = new Date().getFullYear();
+      var labels = ["Working", "Working.", "Working..", "Working..."];
+      var i = 0;
+      setInterval(function () {
+        i = (i + 1) % labels.length;
+        document.getElementById("dots").textContent = labels[i];
+      }, 500);
+    </script>
+  </body>
+</html>
