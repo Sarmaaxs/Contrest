@@ -11,8 +11,12 @@
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:image" content="/contrest-official-logo.jpg" />
 
-    <!-- Apollo Website Tracker -->
-    <script>function initApollo(){var n=Math.random().toString(36).substring(7),o=document.createElement("script");o.src="https://assets.apollo.io/micro/website-tracker/tracker.iife.js?nocache="+n,o.async=!0,o.defer=!0,o.onload=function(){window.trackingFunctions.onLoad({appId:"6a7320acca9ae70014e6940a"})},document.head.appendChild(o)}initApollo();</script>
+    <!-- Baseline hardening. The real, enforced versions of these live in
+         public/_headers (served as actual HTTP response headers by
+         Netlify/Vercel/Cloudflare) — meta tags here are a best-effort
+         fallback for platforms that don't support custom headers. -->
+    <meta http-equiv="X-Content-Type-Options" content="nosniff" />
+    <meta name="referrer" content="strict-origin-when-cross-origin" />
   </head>
   <body>
     <div id="root"></div>

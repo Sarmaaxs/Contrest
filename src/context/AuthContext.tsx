@@ -2,6 +2,8 @@ import { createContext, useContext, useEffect, useState, ReactNode } from 'react
 import type { Session, User } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
 import type { Profile } from '@/lib/supabase';
+import { checkRateLimit, resetRateLimit, formatRetryAfter, checkPasswordStrength } from '@/lib/security';
+import { checkAndAlertNewDevice } from '@/lib/loginAlerts';
 
 try {
   const _ref = new URLSearchParams(window.location.search).get('ref');
@@ -71,13 +73,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .catch(() => {})
       .finally(() => setLoading(false));
 
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, newSession) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((event, newSession) => {
       (async () => {
         setSession(newSession);
         setUser(newSession?.user ?? null);
         try {
           if (newSession?.user) {
             await loadProfile(newSession.user.id);
+            if (event === 'SIGNED_IN') {
+              // Fire-and-forget — a slow/failed geolocation lookup should
+              // never delay getting the person into the app.
+              checkAndAlertNewDevice(newSession.user.id);
+            }
           } else {
             setProfile(null);
           }
@@ -95,7 +102,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signIn = async (email: string, password: string) => {
+    // Throttle repeated attempts per email so a script can't hammer the
+    // login form. Real abuse prevention lives in Supabase Auth itself, but
+    // this stops obvious brute-forcing dead in the browser and gives the
+    // person a clear "try again in Ns" message instead of a wall of errors.
+    const key = `login:${email.trim().toLowerCase()}`;
+    const limit = checkRateLimit(key, { maxAttempts: 5, windowMs: 5 * 60_000 });
+    if (!limit.allowed) {
+      return { error: `Too many attempts. Try again in ${formatRetryAfter(limit.retryAfterMs)}.` };
+    }
+
     const { error } = await supabase.auth.signInWithPassword({ email, password });
+    if (!error) resetRateLimit(key);
     return { error: error ? error.message : null };
   };
 
@@ -106,6 +124,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     fullName: string,
     extra?: { gender?: string; avatar_preset?: string }
   ) => {
+    const strength = checkPasswordStrength(password);
+    if (strength.score < 2) {
+      return { error: strength.reasons[0] ?? 'Choose a stronger password.' };
+    }
+
     const { data, error } = await supabase.auth.signUp({
       email,
       password,

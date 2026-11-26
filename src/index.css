@@ -1,4 +1,32 @@
+
+/* Quiet mode is intentionally global: keep the interface responsive while
+   removing decorative motion and expensive glow animations. */
+html[data-quiet='1'] *,
+html[data-quiet='1'] *::before,
+html[data-quiet='1'] *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+  scroll-behavior: auto !important;
+}
+
 @tailwind base;
+/* Accessibility: respect users who ask the OS to reduce motion. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Keyboard users should always have a visible focus target. */
+:where(button, a, input, textarea, select, [role='button']):focus-visible {
+  outline: 2px solid var(--accent-400);
+  outline-offset: 2px;
+}
+
 @tailwind components;
 @tailwind utilities;
 
@@ -159,7 +187,7 @@ button:active:not(:disabled) {
   animation: sheet-up 0.28s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-/* Double-tap-to-like heart burst (TikTok/IG style) */
+/* Double-tap-to-like heart burst (Contrest interaction) */
 @keyframes heart-burst {
   0% {
     transform: scale(0.3);
@@ -177,6 +205,22 @@ button:active:not(:disabled) {
     transform: scale(1);
     opacity: 0;
   }
+}
+
+/* Contrest music record disc for attached background music */
+@keyframes disc-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+.animate-disc-spin {
+  animation: disc-spin 3s linear infinite;
+}
+.animate-disc-spin.paused {
+  animation-play-state: paused;
 }
 .animate-heart-burst {
   animation: heart-burst 0.7s ease-out forwards;

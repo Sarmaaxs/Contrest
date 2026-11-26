@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Home, MessageCircle, User, Plus, Search, Radio, Bell, Clapperboard } from 'lucide-react';
+import { useEffect, useState, useRef } from 'react';
+import { Home, MessageCircle, User, Plus, Search, Radio, Bell, Clapperboard, Sparkles } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import FeedView from '@/components/views/FeedView';
 import MessagesView from '@/components/views/MessagesView';
@@ -10,23 +10,72 @@ import ExploreView from '@/components/views/ExploreView';
 import NotificationsView from '@/components/views/NotificationsView';
 import ReelsView from '@/components/views/ReelsView';
 import SharedPostView from '@/components/views/SharedPostView';
+import StudioView from '@/components/views/StudioView';
+import StudioEditorView from '@/components/views/StudioEditorView';
 import Logo from '@/components/shared/Logo';
 import type { LogoVariant } from '@/lib/supabase';
 import { getStoredLogoVariant, getStoredAccent, applyAccent } from '@/lib/prefs';
+import { useUnreadCounts } from '@/hooks/useUnreadCounts';
+import ScreenTimeNudge from '@/components/shared/ScreenTimeNudge';
+import { maybeNotifySuggestions } from '@/lib/suggestionNotify';
+import { stateToPath, pathToState } from '@/lib/router';
 
-export type View = 'home' | 'explore' | 'reels' | 'create' | 'messages' | 'profile' | 'settings' | 'live' | 'notifications' | 'shared';
+export type View = 'home' | 'explore' | 'reels' | 'create' | 'messages' | 'profile' | 'settings' | 'live' | 'notifications' | 'shared' | 'studio';
 
 export default function AppShell() {
-  const [view, setView] = useState<View>('home');
+  const initialRoute = pathToState(window.location.pathname);
+  const [view, setView] = useState<View>(initialRoute.view);
   const [showCreate, setShowCreate] = useState(false);
-  const [profileUserId, setProfileUserId] = useState<string | null>(null);
-  const [deepLinkPostId, setDeepLinkPostId] = useState<string | null>(null);
-  const [sharedPostId, setSharedPostId] = useState<string | null>(null);
-  const { profile } = useAuth();
+  const [profileUserId, setProfileUserId] = useState<string | null>(initialRoute.profileUserId);
+  const [deepLinkPostId, setDeepLinkPostId] = useState<string | null>(initialRoute.view === 'profile' ? null : initialRoute.postId);
+  const [sharedPostId, setSharedPostId] = useState<string | null>(initialRoute.postId);
+  const [conversationId, setConversationId] = useState<string | null>(initialRoute.conversationId);
+  const [studioProjectId, setStudioProjectId] = useState<string | null>(initialRoute.projectId);
+  const { user, profile } = useAuth();
+  const { unreadNotifications, unreadMessages } = useUnreadCounts();
+  const fromPopstateRef = useRef(false);
+
+  // Keep navigation bookmarkable and make browser back/forward a true two-way sync.
+  useEffect(() => {
+    if (fromPopstateRef.current) {
+      fromPopstateRef.current = false;
+      return;
+    }
+    const path = stateToPath(view, profileUserId, view === 'shared' ? sharedPostId : deepLinkPostId, view === 'messages' ? conversationId : null, view === 'studio' ? studioProjectId : null);
+    if (path !== window.location.pathname) {
+      window.history.pushState({}, '', path);
+    }
+  }, [view, profileUserId, sharedPostId, deepLinkPostId, conversationId]);
+
+  useEffect(() => {
+    const onPopState = () => {
+      const next = pathToState(window.location.pathname);
+      fromPopstateRef.current = true;
+      setView(next.view);
+      setProfileUserId(next.profileUserId);
+      setSharedPostId(next.postId);
+      setDeepLinkPostId(next.view === 'profile' ? null : next.postId);
+      setConversationId(next.conversationId);
+      setStudioProjectId(next.projectId);
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
+  useEffect(() => {
+    if (user) maybeNotifySuggestions(user.id);
+  }, [user]);
   const logoVariant: LogoVariant = getStoredLogoVariant(profile?.logo_variant ?? 'official');
 
   useEffect(() => {
     applyAccent(getStoredAccent(profile?.theme_accent ?? 'purple'));
+    try {
+      document.documentElement.dataset.quiet = localStorage.getItem('contrest_quiet_mode') === '1' ? '1' : '0';
+      document.documentElement.dataset.dataSaver = localStorage.getItem('contrest_data_saver') === '1' ? '1' : '0';
+    } catch {
+      document.documentElement.dataset.quiet = '0';
+      document.documentElement.dataset.dataSaver = '0';
+    }
   }, [profile?.theme_accent]);
 
   // Open a single shared/invited post from ?post=… (invite=1 is optional flag)
@@ -51,6 +100,8 @@ export default function AppShell() {
   const openProfile = (userId?: string, postId?: string) => {
     setProfileUserId(userId ?? null);
     setDeepLinkPostId(postId ?? null);
+    setConversationId(null);
+    setSharedPostId(null);
     setView('profile');
   };
 
@@ -69,10 +120,11 @@ export default function AppShell() {
           <NavItem icon={<Home className="w-5 h-5" />} label="Home" active={view === 'home'} onClick={() => setView('home')} />
           <NavItem icon={<Search className="w-5 h-5" />} label="Explore" active={view === 'explore'} onClick={() => setView('explore')} />
           <NavItem icon={<Clapperboard className="w-5 h-5" />} label="Reels" active={view === 'reels'} onClick={() => setView('reels')} />
-          <NavItem icon={<Bell className="w-5 h-5" />} label="Notifications" active={view === 'notifications'} onClick={() => setView('notifications')} />
+          <NavItem icon={<Sparkles className="w-5 h-5" />} label="Studio" active={view === 'studio'} onClick={() => setView('studio')} />
+          <NavItem icon={<Bell className="w-5 h-5" />} label="Notifications" active={view === 'notifications'} onClick={() => setView('notifications')} count={unreadNotifications} />
           <NavItem icon={<Radio className="w-5 h-5" />} label="Live" active={view === 'live'} onClick={() => setView('live')} badge="Soon" />
           <NavItem icon={<Plus className="w-5 h-5" />} label="Create" active={false} onClick={() => setShowCreate(true)} />
-          <NavItem icon={<MessageCircle className="w-5 h-5" />} label="Direct" active={view === 'messages'} onClick={() => setView('messages')} />
+          <NavItem icon={<MessageCircle className="w-5 h-5" />} label="Direct" active={view === 'messages'} onClick={() => setView('messages')} count={unreadMessages} />
           <NavItem icon={<User className="w-5 h-5" />} label="Profile" active={view === 'profile'} onClick={() => openProfile()} />
         </nav>
 
@@ -95,11 +147,21 @@ export default function AppShell() {
           <span className="font-semibold tracking-tight text-white">Contrest</span>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={() => setView('notifications')} className="p-1.5 hover:bg-white/10 rounded-lg">
+          <button onClick={() => setView('notifications')} className="p-1.5 hover:bg-white/10 rounded-lg relative">
             <Bell className="w-5 h-5 text-neutral-200" />
+            {unreadNotifications > 0 && (
+              <span className="absolute top-0.5 right-0.5 min-w-[15px] h-[15px] px-0.5 rounded-full bg-red-500 text-white text-[9px] font-semibold flex items-center justify-center leading-none">
+                {unreadNotifications > 99 ? '99+' : unreadNotifications}
+              </span>
+            )}
           </button>
           <button onClick={() => setView('messages')} className="p-1.5 hover:bg-white/10 rounded-lg relative">
             <MessageCircle className="w-5 h-5 text-neutral-200" />
+            {unreadMessages > 0 && (
+              <span className="absolute top-0.5 right-0.5 min-w-[15px] h-[15px] px-0.5 rounded-full bg-red-500 text-white text-[9px] font-semibold flex items-center justify-center leading-none">
+                {unreadMessages > 99 ? '99+' : unreadMessages}
+              </span>
+            )}
           </button>
           <button onClick={() => setView('live')} className="p-1.5 hover:bg-white/10 rounded-lg">
             <Radio className="w-5 h-5 text-red-400" />
@@ -122,7 +184,15 @@ export default function AppShell() {
         )}
         {view === 'explore' && <ExploreView onOpenProfile={(id) => openProfile(id)} />}
         {view === 'reels' && <ReelsView />}
-        {view === 'messages' && <MessagesView onOpenProfile={(id) => openProfile(id)} />}
+        {view === 'studio' && !studioProjectId && <StudioView onBack={() => setView('home')} onOpenProject={(id) => { setStudioProjectId(id); setView('studio'); }} />}
+        {view === 'studio' && studioProjectId && <StudioEditorView projectId={studioProjectId} onBack={() => { setStudioProjectId(null); setView('studio'); }} />}
+        {view === 'messages' && (
+          <MessagesView
+            initialConversationId={conversationId ?? undefined}
+            onConversationChange={setConversationId}
+            onOpenProfile={(id) => openProfile(id)}
+          />
+        )}
         {view === 'profile' && (
           <ProfileView
             userId={profileUserId ?? undefined}
@@ -172,6 +242,7 @@ export default function AppShell() {
       </nav>
 
       {showCreate && <CreatePostModal onClose={() => setShowCreate(false)} />}
+      <ScreenTimeNudge />
       </div>
     </div>
   );
@@ -183,12 +254,14 @@ function NavItem({
   active,
   onClick,
   badge,
+  count,
 }: {
   icon: React.ReactNode;
   label: string;
   active: boolean;
   onClick: () => void;
   badge?: string;
+  count?: number;
 }) {
   return (
     <button
@@ -197,7 +270,14 @@ function NavItem({
         active ? 'bg-white/10 text-white' : 'text-neutral-400 hover:bg-white/5 hover:text-neutral-200'
       }`}
     >
-      {icon}
+      <span className="relative">
+        {icon}
+        {!!count && (
+          <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 rounded-full bg-red-500 text-white text-[10px] font-semibold flex items-center justify-center leading-none">
+            {count > 99 ? '99+' : count}
+          </span>
+        )}
+      </span>
       <span className="flex-1 text-left">{label}</span>
       {badge && (
         <span className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-white/10 text-neutral-300">

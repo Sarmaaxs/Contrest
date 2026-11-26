@@ -1,4 +1,4 @@
-/** Photo avatar, or simple initials — TikTok-blue verified badge when verified */
+/** Photo avatar, or simple initials — Contrest verified badge when verified */
 
 import VerifiedBadge from '@/components/shared/VerifiedBadge';
 

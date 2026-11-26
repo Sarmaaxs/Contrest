@@ -17,8 +17,8 @@ export default function ShareSheet({ postId, caption, onClose }: Props) {
   const inviteInputRef = useRef<HTMLInputElement>(null);
   const postInputRef = useRef<HTMLInputElement>(null);
 
-  const postUrl = `${SHARE_ORIGIN}/?post=${encodeURIComponent(postId)}`;
-  const inviteUrl = `${SHARE_ORIGIN}/?post=${encodeURIComponent(postId)}&invite=1`;
+  const postUrl = `${SHARE_ORIGIN}/post/${encodeURIComponent(postId)}`;
+  const inviteUrl = `${SHARE_ORIGIN}/post/${encodeURIComponent(postId)}?invite=1`;
 
   const copy = async (url: string, kind: 'post' | 'invite') => {
     try {
@@ -81,6 +81,25 @@ export default function ShareSheet({ postId, caption, onClose }: Props) {
             <span className="text-neutral-200">this post only</span>, not your full feed.
           </p>
 
+          {/* Primary action — opens the OS share sheet (Messages, WhatsApp,
+              installed sharing targets. This is the Web Share API;
+              the person picks the app themselves, we never guess for them. */}
+          {typeof navigator !== 'undefined' && 'share' in navigator ? (
+            <button
+              type="button"
+              onClick={() => nativeShare(postUrl)}
+              className="w-full flex items-center justify-center gap-2 rounded-xl py-3.5 text-sm font-semibold text-white"
+              style={{ background: 'linear-gradient(135deg, var(--accent-500), var(--accent-600))' }}
+            >
+              <Share2 className="w-4 h-4" />
+              Share to…
+            </button>
+          ) : (
+            <p className="text-[11px] text-neutral-500 -mt-1">
+              Your browser doesn't support sharing straight to apps — use copy link below.
+            </p>
+          )}
+
           {/* Post link — selectable + copy */}
           <div className="rounded-xl glass px-3 py-3 space-y-2">
             <div className="flex items-center gap-2">
@@ -129,7 +148,7 @@ export default function ShareSheet({ postId, caption, onClose }: Props) {
                 type="button"
                 onClick={() => copy(inviteUrl, 'invite')}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold text-white"
-                style={{ background: 'linear-gradient(135deg, #ff0050, #a855f7)' }}
+                style={{ background: 'linear-gradient(135deg, var(--accent-600), var(--accent-500))' }}
               >
                 <Copy className="w-3.5 h-3.5" />
                 {copied === 'invite' ? 'Copied' : 'Copy'}
@@ -144,15 +163,6 @@ export default function ShareSheet({ postId, caption, onClose }: Props) {
             />
           </div>
 
-          <button
-            type="button"
-            onClick={() => nativeShare(inviteUrl)}
-            className="w-full flex items-center justify-center gap-2 rounded-xl py-3 text-sm font-semibold text-white"
-            style={{ background: 'linear-gradient(135deg, var(--accent-500), var(--accent-600))' }}
-          >
-            <Share2 className="w-4 h-4" />
-            Share via device…
-          </button>
         </div>
       </div>
     </div>

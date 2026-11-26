@@ -90,11 +90,6 @@ export default function TermsView({ onBack }: { onBack: () => void }) {
         <Section title="13. Contact">
           Questions about these Terms can be directed to the developer via the contact details listed in Settings.
         </Section>
-
-        <p className="text-xs text-neutral-600 pt-4 border-t border-white/10">
-          This document is a general-purpose template provided for a personal/independent project and is not a
-          substitute for advice from a qualified lawyer. Review it before relying on it for a commercial product.
-        </p>
       </div>
     </div>
   );

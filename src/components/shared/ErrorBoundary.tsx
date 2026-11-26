@@ -31,7 +31,9 @@ export default class ErrorBoundary extends Component<Props, State> {
             >
               Reload Contrest
             </button>
-            <p className="text-[11px] text-neutral-600 mt-4">{this.state.message}</p>
+            {import.meta.env.DEV && (
+              <p className="text-[11px] text-neutral-600 mt-4">{this.state.message}</p>
+            )}
           </div>
         </div>
       );

@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { ArrowLeft, Bell, Heart, MessageCircle, UserPlus } from 'lucide-react';
+import { ArrowLeft, Bell, Heart, MessageCircle, UserPlus, ShieldAlert, Users } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
 import Avatar from '@/components/shared/Avatar';
@@ -47,6 +47,8 @@ export default function NotificationsView({
     if (type === 'like') return <Heart className="w-4 h-4 text-red-400" />;
     if (type === 'comment') return <MessageCircle className="w-4 h-4 text-accent" />;
     if (type === 'follow') return <UserPlus className="w-4 h-4 text-emerald-400" />;
+    if (type === 'login_alert') return <ShieldAlert className="w-4 h-4 text-amber-400" />;
+    if (type === 'suggestion') return <Users className="w-4 h-4 text-accent" />;
     return <Bell className="w-4 h-4 text-neutral-400" />;
   };
 
@@ -71,26 +73,41 @@ export default function NotificationsView({
           <p className="text-sm text-neutral-500 text-center py-16">No notifications yet</p>
         ) : (
           <div className="divide-y divide-white/5">
-            {items.map((n) => (
-              <button
-                key={n.id}
-                type="button"
-                onClick={() => n.actor_id && onOpenProfile?.(n.actor_id, n.post_id ?? undefined)}
-                className={`w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-white/[0.04] ${
-                  n.read ? '' : 'bg-accent/5'
-                }`}
-              >
-                <Avatar url={n.profiles?.avatar_url} name={n.profiles?.full_name} size="md" />
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm text-neutral-100">
-                    <span className="font-medium">@{n.profiles?.username ?? 'someone'}</span>{' '}
-                    <span className="text-neutral-400">{n.message ?? n.type}</span>
-                  </p>
-                  <p className="text-xs text-neutral-500 mt-0.5">{timeAgo(n.created_at)}</p>
-                </div>
-                {icon(n.type)}
-              </button>
-            ))}
+            {items.map((n) => {
+              const isSystem = n.type === 'login_alert' || n.type === 'suggestion';
+              return (
+                <button
+                  key={n.id}
+                  type="button"
+                  onClick={() => !isSystem && n.actor_id && onOpenProfile?.(n.actor_id, n.post_id ?? undefined)}
+                  className={`w-full flex items-center gap-3 px-4 py-3 text-left ${
+                    isSystem ? '' : 'hover:bg-white/[0.04]'
+                  } ${n.read ? '' : 'bg-accent/5'}`}
+                >
+                  {isSystem ? (
+                    <div className="w-9 h-9 rounded-full bg-white/10 flex items-center justify-center shrink-0">
+                      {icon(n.type)}
+                    </div>
+                  ) : (
+                    <Avatar url={n.profiles?.avatar_url} name={n.profiles?.full_name} size="md" />
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-neutral-100">
+                      {isSystem ? (
+                        <span className="text-neutral-200">{n.message}</span>
+                      ) : (
+                        <>
+                          <span className="font-medium">@{n.profiles?.username ?? 'someone'}</span>{' '}
+                          <span className="text-neutral-400">{n.message ?? n.type}</span>
+                        </>
+                      )}
+                    </p>
+                    <p className="text-xs text-neutral-500 mt-0.5">{timeAgo(n.created_at)}</p>
+                  </div>
+                  {!isSystem && icon(n.type)}
+                </button>
+              );
+            })}
           </div>
         )}
       </div>

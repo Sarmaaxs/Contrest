@@ -6,7 +6,7 @@ import Avatar from '@/components/shared/Avatar';
 
 type Row = { id: string; username: string; full_name: string; avatar_url: string | null; status_text: string | null };
 
-/** Mutual friends' "now playing" — Spotify-style */
+/** Mutual friends' "now playing" — Now-playing */
 export default function FriendsActivity({ onOpenProfile }: { onOpenProfile?: (id: string) => void }) {
   const { user } = useAuth();
   const [rows, setRows] = useState<Row[]>([]);

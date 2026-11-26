@@ -1,5 +1,5 @@
 /**
- * "Someone sent you a message" — Instagram-style, not every "hi".
+ * "Someone sent you a message" — platform-style, not every "hi".
  *
  * Rules:
  *  1) Unread must be at least 24 hours old before any email.
@@ -55,7 +55,7 @@ serve(async (req) => {
     // Auth: user JWT (from app) OR service role / cron secret
     const authHeader = req.headers.get('Authorization') ?? '';
     const isService =
-      authHeader.includes(serviceKey) ||
+      authHeader === `Bearer ${serviceKey}` ||
       req.headers.get('x-cron-secret') === Deno.env.get('CRON_SECRET');
 
     let actorId: string | null = null;

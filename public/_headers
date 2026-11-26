@@ -1,0 +1,16 @@
+# Security headers, served as real HTTP response headers by Netlify /
+# Cloudflare Pages (both read this file automatically). If you deploy to
+# Vercel instead, the equivalent headers + SPA rewrite are already set up
+# in vercel.json at the project root.
+#
+# This is the same baseline set that Stripe, GitHub and most security-
+# conscious SaaS products ship: a locked-down CSP, clickjacking protection,
+# MIME sniffing protection, and HSTS.
+
+/*
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(self), microphone=(self), geolocation=(), payment=()
+  Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.audius.co https://*.audius.co; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'

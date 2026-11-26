@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   Heart,
   MessageCircle,
@@ -12,9 +12,13 @@ import {
   UserX,
   Info,
   Music,
+  X,
+  Pause,
+  Play,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { notify } from '@/lib/notify';
+import { getCachedFeed, setCachedFeed } from '@/lib/feedCache';
 import type { Post, Comment, Profile } from '@/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
 import Avatar from '@/components/shared/Avatar';
@@ -64,6 +68,10 @@ export default function FeedView({
   const [whyPost, setWhyPost] = useState<FeedPost | null>(null);
   const [reportOpen, setReportOpen] = useState(false);
   const [sharePostId, setSharePostId] = useState<string | null>(null);
+  const [commentsFor, setCommentsFor] = useState<string | null>(null);
+  const [expandedCaption, setExpandedCaption] = useState<string | null>(null);
+  const [playingMusicId, setPlayingMusicId] = useState<string | null>(null);
+  const musicAudioRef = useRef<HTMLAudioElement | null>(null);
   const [suggested, setSuggested] = useState<Profile[]>([]);
 
   useEffect(() => {
@@ -81,7 +89,15 @@ export default function FeedView({
 
   const loadPosts = useCallback(async () => {
     if (!user) return;
-    setLoading(true);
+    // Paint whatever we last saw immediately instead of a blank skeleton,
+    // then let the real fetch below silently replace it once it lands.
+    const cached = getCachedFeed<FeedPost>(user.id, tab);
+    if (cached && cached.length > 0) {
+      setPosts(cached);
+      setLoading(false);
+    } else {
+      setLoading(true);
+    }
 
     const [
       { data: blocks },
@@ -217,6 +233,7 @@ export default function FeedView({
 
     setPosts(enriched);
     setLoading(false);
+    setCachedFeed(user.id, tab, enriched);
   }, [user, tab, profile]);
 
   useEffect(() => {
@@ -311,6 +328,30 @@ export default function FeedView({
     setSharePostId(post.id);
   };
 
+  const toggleMusic = (post: FeedPost) => {
+    if (playingMusicId === post.id) {
+      musicAudioRef.current?.pause();
+      musicAudioRef.current = null;
+      setPlayingMusicId(null);
+      return;
+    }
+    musicAudioRef.current?.pause();
+    if (!post.music_stream_url) return;
+    const audio = new Audio(post.music_stream_url);
+    audio.currentTime = post.music_start_seconds ?? 0;
+    audio.onended = () => setPlayingMusicId((cur) => (cur === post.id ? null : cur));
+    audio.onerror = () => setPlayingMusicId((cur) => (cur === post.id ? null : cur));
+    musicAudioRef.current = audio;
+    audio.play().catch(() => setPlayingMusicId(null));
+    setPlayingMusicId(post.id);
+  };
+
+  useEffect(() => {
+    return () => {
+      musicAudioRef.current?.pause();
+    };
+  }, []);
+
   const submitComment = async (postId: string) => {
     if (!user || !profile) return;
     const text = (commentText[postId] ?? '').trim();
@@ -397,41 +438,15 @@ export default function FeedView({
           </p>
         </div>
       ) : (
-        <div className="snap-y snap-mandatory overflow-y-scroll h-[calc(100vh-140px)] -mx-4 px-4 space-y-4 hide-scrollbar">
+        <div className="snap-y snap-mandatory overflow-y-scroll h-[calc(100vh-140px)] -mx-4 hide-scrollbar">
         {posts.map((post, idx) => (
           <div key={post.id}>
           <article
-            className="min-h-[calc(100vh-140px)] snap-start snap-always flex flex-col justify-center bg-white/[0.04] backdrop-blur-xl rounded-xl border border-white/10 overflow-hidden"
+            className="h-[calc(100vh-140px)] snap-start snap-always relative bg-black overflow-hidden"
           >
-            <header className="flex items-center justify-between px-4 py-3">
-              <button
-                onClick={() => post.user_id && onOpenProfile(post.user_id)}
-                className="flex items-center gap-3"
-              >
-                <Avatar
-                  url={post.profiles?.avatar_url}
-                  name={post.profiles?.full_name}
-                  size="sm"
-                  verified={isVerified(post.profiles)}
-                />
-                <div className="text-left">
-                  <p className="text-sm font-medium text-white flex items-center gap-1">
-                    @{post.profiles?.username}
-                    {isVerified(post.profiles) && (
-                      <VerifiedBadge size="sm" />
-                    )}
-                  </p>
-                  <p className="text-xs text-neutral-400">{timeAgo(post.created_at)}</p>
-                </div>
-              </button>
-              <button onClick={() => setMenuPost(post)} className="p-1.5 hover:bg-white/[0.06] rounded-full">
-                <MoreHorizontal className="w-5 h-5 text-neutral-400" />
-              </button>
-            </header>
-
+            {/* Full-bleed media — fills exactly one device screen, full-screen media layout */}
             <div
-              className="relative bg-black w-full"
-              style={{ minHeight: 'min(72vh, 640px)', maxHeight: '78vh' }}
+              className="absolute inset-0"
               onDoubleClick={() => {
                 if (!post.liked) toggleLike(post.id, false);
                 setBurstPostId(post.id);
@@ -452,7 +467,7 @@ export default function FeedView({
                   alt={post.caption ?? 'post'}
                   loading="lazy"
                   decoding="async"
-                  className="absolute inset-0 w-full h-full object-contain bg-black"
+                  className="absolute inset-0 w-full h-full object-cover"
                 />
               )}
               {burstPostId === post.id && (
@@ -460,88 +475,116 @@ export default function FeedView({
               )}
             </div>
 
-            <div className="px-4 py-3">
-              <div className="flex items-center gap-4 mb-3">
-                <button onClick={() => toggleLike(post.id, post.liked)} className="flex items-center gap-1.5">
-                  <Heart
-                    className={`w-6 h-6 transition-transform active:scale-90 ${
-                      post.liked ? 'fill-red-500 text-red-500' : 'text-neutral-300'
-                    }`}
-                  />
-                  <span className="text-sm text-neutral-300">{post.likeCount}</span>
-                </button>
-                <div className="flex items-center gap-1.5">
-                  <MessageCircle className="w-6 h-6 text-neutral-300" />
-                  <span className="text-sm text-neutral-300">{post.commentCount}</span>
-                </div>
-                <button onClick={() => toggleRepost(post.id, post.reposted)} className="flex items-center gap-1.5">
-                  <Repeat2 className={`w-6 h-6 ${post.reposted ? 'text-emerald-400' : 'text-neutral-300'}`} />
-                  <span className="text-sm text-neutral-300">{post.repostCount}</span>
-                </button>
-                <button onClick={() => sharePost(post)} className="ml-auto">
-                  <Share2 className="w-5 h-5 text-neutral-300" />
-                </button>
-                <button onClick={() => toggleBookmark(post.id, post.bookmarked)}>
-                  <Bookmark
-                    className={`w-6 h-6 ${post.bookmarked ? 'fill-accent text-accent' : 'text-neutral-300'}`}
-                  />
-                </button>
-              </div>
+            {/* Top scrim + menu */}
+            <div className="absolute top-0 inset-x-0 h-20 bg-gradient-to-b from-black/50 to-transparent pointer-events-none" />
+            <button
+              onClick={() => setMenuPost(post)}
+              className="absolute top-3 right-3 p-2 rounded-full bg-black/30 backdrop-blur hover:bg-black/50"
+            >
+              <MoreHorizontal className="w-5 h-5 text-white" />
+            </button>
 
+            {/* Bottom scrim + caption overlay */}
+            <div className="absolute bottom-0 inset-x-0 h-2/5 bg-gradient-to-t from-black/80 via-black/30 to-transparent pointer-events-none" />
+            <div className="absolute bottom-4 left-4 right-20 text-white">
+              <button
+                onClick={() => post.user_id && onOpenProfile(post.user_id)}
+                className="flex items-center gap-2 mb-2"
+              >
+                <Avatar
+                  url={post.profiles?.avatar_url}
+                  name={post.profiles?.full_name}
+                  size="sm"
+                  ring
+                  verified={isVerified(post.profiles)}
+                />
+                <span className="font-medium text-sm flex items-center gap-1">
+                  @{post.profiles?.username}
+                  {isVerified(post.profiles) && <VerifiedBadge size="sm" />}
+                </span>
+                <span className="text-xs text-white/60">· {timeAgo(post.created_at)}</span>
+              </button>
               {post.caption && (
-                <p className="text-sm text-neutral-100 mb-2">
-                  <span className="font-medium">@{post.profiles?.username}</span> {post.caption}
+                <p
+                  onClick={() => setExpandedCaption((cur) => (cur === post.id ? null : post.id))}
+                  className={`text-sm leading-relaxed ${expandedCaption === post.id ? '' : 'line-clamp-2'}`}
+                >
+                  {post.caption}
+                  {post.caption.length > 80 && (
+                    <span className="text-white/60 ml-1">
+                      {expandedCaption === post.id ? ' less' : '… more'}
+                    </span>
+                  )}
                 </p>
               )}
               {post.hashtags && post.hashtags.length > 0 && (
-                <p className="text-xs text-accent mb-2">{post.hashtags.map((h) => `#${h}`).join(' ')}</p>
+                <p className="text-xs text-accent mt-1">{post.hashtags.map((h) => `#${h}`).join(' ')}</p>
               )}
               {post.music_title && (
-                <div className="flex items-center gap-2 mb-2 text-xs text-neutral-300">
-                  {post.music_artwork_url ? (
-                    <img src={post.music_artwork_url} alt="" className="w-6 h-6 rounded object-cover" />
-                  ) : (
-                    <Music className="w-3.5 h-3.5 text-accent" />
-                  )}
+                <button
+                  onClick={() => toggleMusic(post)}
+                  className="flex items-center gap-2 mt-2 text-xs text-white/80"
+                >
+                  <span
+                    className={`w-6 h-6 rounded-full bg-black/60 border border-white/20 flex items-center justify-center overflow-hidden shrink-0 animate-disc-spin ${
+                      playingMusicId === post.id ? '' : 'paused'
+                    }`}
+                  >
+                    {post.music_artwork_url ? (
+                      <img src={post.music_artwork_url} alt="" className="w-full h-full object-cover" />
+                    ) : (
+                      <Music className="w-3 h-3 text-white/80" />
+                    )}
+                  </span>
                   <span className="truncate">
                     {post.music_title}
                     {post.music_artist ? ` · ${post.music_artist}` : ''}
                   </span>
-                  {post.music_stream_url && (
-                    <audio src={post.music_stream_url} controls className="h-7 max-w-[140px] ml-auto" preload="none" />
+                  {playingMusicId === post.id ? (
+                    <Pause className="w-3 h-3 shrink-0" />
+                  ) : (
+                    <Play className="w-3 h-3 shrink-0" />
                   )}
-                </div>
-              )}
-
-              {post.comments.length > 0 && (
-                <div className="space-y-1.5 mb-3">
-                  {post.comments.map((c) => (
-                    <div key={c.id} className="text-sm text-neutral-100">
-                      <span className="font-medium">@{c.profiles?.username}</span> {c.content}
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  value={commentText[post.id] ?? ''}
-                  onChange={(e) => setCommentText((prev) => ({ ...prev, [post.id]: e.target.value }))}
-                  onKeyDown={(e) => e.key === 'Enter' && submitComment(post.id)}
-                  placeholder="Add a comment…"
-                  className="flex-1 text-sm px-3 py-2 rounded-full border border-white/10 focus:outline-none focus:border-white/20 bg-black/40 text-white"
-                />
-                <button onClick={() => submitComment(post.id)} className="text-sm font-medium text-accent shrink-0">
-                  Post
                 </button>
-              </div>
+              )}
+            </div>
+
+            {/* Right-side action rail — Contrest action rail of
+                like / comment / share / save, overlaid on the media instead
+                of stacked below it, so every post stays exactly one screen tall. */}
+            <div className="absolute bottom-6 right-2 flex flex-col items-center gap-4 text-white">
+              <button onClick={() => toggleLike(post.id, post.liked)} className="flex flex-col items-center gap-1">
+                <Heart
+                  className={`w-7 h-7 transition-transform active:scale-90 ${
+                    post.liked ? 'fill-red-500 text-red-500' : ''
+                  }`}
+                />
+                <span className="text-xs drop-shadow">{post.likeCount}</span>
+              </button>
+              <button
+                onClick={() => setCommentsFor(post.id)}
+                className="flex flex-col items-center gap-1"
+              >
+                <MessageCircle className="w-7 h-7" />
+                <span className="text-xs drop-shadow">{post.commentCount}</span>
+              </button>
+              <button onClick={() => toggleRepost(post.id, post.reposted)} className="flex flex-col items-center gap-1">
+                <Repeat2 className={`w-7 h-7 ${post.reposted ? 'text-emerald-400' : ''}`} />
+                <span className="text-xs drop-shadow">{post.repostCount}</span>
+              </button>
+              <button onClick={() => sharePost(post)} className="flex flex-col items-center gap-1">
+                <Share2 className="w-6 h-6" />
+                <span className="text-xs drop-shadow">Share</span>
+              </button>
+              <button onClick={() => toggleBookmark(post.id, post.bookmarked)}>
+                <Bookmark className={`w-7 h-7 ${post.bookmarked ? 'fill-accent text-accent' : ''}`} />
+              </button>
             </div>
           </article>
 
           {/* Suggested accounts between posts (every 2nd) */}
           {suggested.length > 0 && (idx + 1) % 2 === 0 && (
-            <div className="my-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-3">
+            <div className="my-2 mx-4 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-3">
               <p className="text-[11px] font-semibold uppercase tracking-wide text-neutral-400 mb-2">
                 Suggested for you
               </p>
@@ -659,6 +702,58 @@ export default function FeedView({
           caption={posts.find((p) => p.id === sharePostId)?.caption}
           onClose={() => setSharePostId(null)}
         />
+      )}
+
+      {/* Comments — a slide-up sheet instead of an inline list, so viewing
+          comments never makes the post taller than one screen. */}
+      {commentsFor && (
+        <div
+          className="fixed inset-0 z-50 bg-black/70 flex flex-col justify-end"
+          onClick={() => setCommentsFor(null)}
+        >
+          <div
+            className="bg-ink-900 rounded-t-2xl max-h-[65vh] flex flex-col border-t border-white/10"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
+              <span className="text-sm font-medium text-white">Comments</span>
+              <button type="button" onClick={() => setCommentsFor(null)}>
+                <X className="w-5 h-5 text-neutral-400" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3 min-h-[120px]">
+              {(posts.find((p) => p.id === commentsFor)?.comments.length ?? 0) === 0 && (
+                <p className="text-sm text-neutral-500 text-center py-6">No comments yet — say something</p>
+              )}
+              {posts
+                .find((p) => p.id === commentsFor)
+                ?.comments.map((c) => (
+                  <div key={c.id} className="text-sm text-neutral-100">
+                    <span className="font-medium">@{c.profiles?.username}</span> {c.content}
+                  </div>
+                ))}
+            </div>
+            <div className="flex gap-2 p-3 border-t border-white/10 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+              <input
+                value={commentsFor ? (commentText[commentsFor] ?? '') : ''}
+                onChange={(e) =>
+                  commentsFor && setCommentText((prev) => ({ ...prev, [commentsFor]: e.target.value }))
+                }
+                onKeyDown={(e) => e.key === 'Enter' && commentsFor && submitComment(commentsFor)}
+                placeholder="Add a comment…"
+                className="flex-1 px-3 py-2.5 rounded-full glass-input text-sm"
+                autoFocus
+              />
+              <button
+                type="button"
+                onClick={() => commentsFor && submitComment(commentsFor)}
+                className="text-sm font-semibold text-accent px-3"
+              >
+                Post
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

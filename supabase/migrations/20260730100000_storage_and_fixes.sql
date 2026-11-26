@@ -4,7 +4,7 @@
 Run in Supabase SQL Editor after previous migrations.
 
 Creates public media/avatars buckets and storage policies so users can
-upload from their device (TikTok/Snapchat style).
+upload from their device (mobile media apps).
 */
 
 -- Storage buckets (idempotent)

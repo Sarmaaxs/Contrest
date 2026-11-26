@@ -29,6 +29,7 @@ export default function ReelsView() {
   const [draft, setDraft] = useState('');
   const [shareReelId, setShareReelId] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const videoRefs = useRef<Map<number, HTMLVideoElement>>(new Map());
 
   const loadReels = useCallback(async () => {
     if (!user) return;
@@ -99,6 +100,24 @@ export default function ReelsView() {
   useEffect(() => {
     loadReels();
   }, [loadReels]);
+
+  // The `autoPlay` attribute only affects a <video> at the moment it's
+  // mounted — toggling it via props does nothing once the element already
+  // exists in the DOM. Without this, scrolling to a new reel never paused
+  // the previous one (it kept playing and buffering off-screen) and never
+  // started the new one automatically.
+  useEffect(() => {
+    videoRefs.current.forEach((video, idx) => {
+      if (idx === activeIndex) {
+        video.play().catch(() => {
+          /* autoplay can be blocked before first user gesture; the mute
+             button and manual tap on the video still work */
+        });
+      } else if (!video.paused) {
+        video.pause();
+      }
+    });
+  }, [activeIndex, reels.length]);
 
   const toggleLike = async (postId: string, currentlyLiked: boolean) => {
     if (!user) return;
@@ -215,11 +234,19 @@ export default function ReelsView() {
             className="h-screen w-full snap-start snap-always relative flex items-center justify-center"
           >
             <video
+              ref={(el) => {
+                if (el) videoRefs.current.set(idx, el);
+                else videoRefs.current.delete(idx);
+              }}
               src={reel.media_url}
-              autoPlay={idx === activeIndex}
               loop
               muted={muted}
               playsInline
+              preload={
+                document.documentElement.dataset.dataSaver === '1'
+                  ? (idx === activeIndex ? 'auto' : 'none')
+                  : (Math.abs(idx - activeIndex) <= 1 ? 'auto' : 'none')
+              }
               className="h-full w-full object-contain"
             />
             <button

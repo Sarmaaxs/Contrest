@@ -7,7 +7,7 @@
 Free tier roughly:
 - ~1 GB storage
 - bandwidth limits
-- fine for dozens of users, not TikTok-scale video
+- fine for dozens of users, not large-scale video
 
 ## Use Supabase for
 - Avatars

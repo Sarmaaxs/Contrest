@@ -21,7 +21,7 @@ Policies: authenticated users may insert/update/delete only under folder `{auth.
 - Search results were not clickable → fixed (opens profile + Follow button)
 - Explore did not receive `onOpenProfile` → fixed
 - Posts required a URL → now **Gallery / Camera** device upload
-- Avatar was URL-only → camera button on profile (Snapchat-style)
+- Avatar was URL-only → camera button on profile (mobile-first)
 - Live needed `live_streams` table + clearer errors; host now gets **real camera** via getUserMedia
 
 ## 3. Run app

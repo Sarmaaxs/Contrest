@@ -13,7 +13,8 @@ import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
 import { moderateText } from '@/lib/moderation';
 import { extractHashtags } from '@/lib/feed';
-import { isVideoFile, validateMediaFile } from '@/lib/upload';
+import { isVideoFile, validateMediaFile, uploadAudio } from '@/lib/upload';
+import { checkCooldown, formatRetryAfter, sanitizeText, INPUT_LIMITS } from '@/lib/security';
 import { uploadAny } from '@/lib/storageProviders';
 import PreUploadEditor from '@/components/post/PreUploadEditor';
 import MusicSelector from '@/components/shared/MusicSelector';
@@ -40,6 +41,25 @@ export default function CreatePostModal({ onClose }: { onClose: () => void }) {
   const [music, setMusic] = useState<AudiusTrack | null>(null);
   const [uploadPct, setUploadPct] = useState(0);
 
+  // Preserve compose intent across accidental closes/refreshes. Media itself is not
+  // persisted here because browser File objects cannot safely be put in localStorage.
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('contrest_compose_draft');
+      if (!raw) return;
+      const draft = JSON.parse(raw);
+      if (typeof draft.caption === 'string') setCaption(draft.caption);
+      if (['public', 'followers', 'close_friends'].includes(draft.visibility)) setVisibility(draft.visibility);
+      if (draft.savedAt && Date.now() - Number(draft.savedAt) < 7 * 24 * 60 * 60 * 1000) setProgress('Draft restored');
+    } catch { /* ignore */ }
+  }, []);
+
+  useEffect(() => {
+    try {
+      if (caption || visibility !== 'public') localStorage.setItem('contrest_compose_draft', JSON.stringify({ caption, visibility, savedAt: Date.now() }));
+    } catch { /* ignore */ }
+  }, [caption, visibility]);
+
   useEffect(() => {
     return () => {
       if (preview) URL.revokeObjectURL(preview);
@@ -54,6 +74,8 @@ export default function CreatePostModal({ onClose }: { onClose: () => void }) {
       return;
     }
     setError(null);
+    if (fileRef.current) fileRef.current.value = '';
+    if (cameraRef.current) cameraRef.current.value = '';
     setFile(f);
     setMediaType(isVideoFile(f) ? 'video' : 'image');
     if (preview) URL.revokeObjectURL(preview);
@@ -63,11 +85,14 @@ export default function CreatePostModal({ onClose }: { onClose: () => void }) {
 
   const clearMedia = () => {
     setFile(null);
+    if (fileRef.current) fileRef.current.value = '';
+    if (cameraRef.current) cameraRef.current.value = '';
     if (preview) URL.revokeObjectURL(preview);
     setPreview(null);
     setStep('capture');
     setMusic(null);
     setCaption('');
+    try { localStorage.removeItem('contrest_compose_draft'); } catch { /* ignore */ }
   };
 
   const submit = async () => {
@@ -76,9 +101,17 @@ export default function CreatePostModal({ onClose }: { onClose: () => void }) {
       setError('Pick a photo or video first.');
       return;
     }
-    const mod = moderateText(caption);
+    const cleanCaption = sanitizeText(caption, INPUT_LIMITS.caption);
+    const mod = moderateText(cleanCaption);
     if (!mod.allowed) {
       setError(mod.reason ?? 'Content blocked by community guidelines.');
+      return;
+    }
+    // Posting cooldown — stops a script from
+    // flooding the feed even though RLS would ultimately still allow it.
+    const cooldown = checkCooldown(`post-create:${user.id}`, 3000);
+    if (!cooldown.allowed) {
+      setError(`You're posting too fast. Try again in ${formatRetryAfter(cooldown.retryAfterMs)}.`);
       return;
     }
     setSubmitting(true);
@@ -88,48 +121,60 @@ export default function CreatePostModal({ onClose }: { onClose: () => void }) {
     const tick = window.setInterval(() => {
       setUploadPct((p) => Math.min(p + 8, 88));
     }, 400);
+    let uploadedMediaPath: string | null = null;
+    let uploadedAudioPath: string | null = null;
     try {
-      const { url } = await uploadAny(user.id, file, 'media');
+      const uploadedMedia = await uploadAny(user.id, file, 'media');
+      const { url } = uploadedMedia;
+      uploadedMediaPath = uploadedMedia.path;
       setUploadPct(92);
       setProgress('Posting…');
-      const musicFields = music
-        ? {
-            music_track_id: music.id,
-            music_title: music.title,
-            music_artist: music.user.name,
-            music_stream_url: music.streamUrl,
-            music_artwork_url: music.artwork?.['150x150'] ?? music.artwork?.['480x480'] ?? null,
-          }
-        : {};
-
-      let insertError = (
-        await supabase.from('posts').insert({
-          user_id: user.id,
-          media_url: url,
-          media_type: mediaType,
-          content_origin: 'human',
-          caption: caption.trim() || null,
-          is_flagged: mod.flagged,
-          visibility,
-          hashtags: extractHashtags(caption),
-          ...musicFields,
-        })
-      ).error;
-      if (insertError && /music_|is_flagged|visibility|content_origin|schema cache/i.test(insertError.message)) {
-        insertError = (
-          await supabase.from('posts').insert({
-            user_id: user.id,
-            media_url: url,
-            media_type: mediaType,
-            caption: caption.trim() || null,
-            hashtags: extractHashtags(caption),
-          })
-        ).error;
+      let musicFields: Record<string, unknown> = {};
+      if (music) {
+        // Custom uploads are still a local blob at this point — actually
+        // persist the audio file to storage now, right before the post
+        // itself is created, so the attached clip survives a refresh.
+        let streamUrl = music.streamUrl;
+        if (music.source === 'custom' && music.file) {
+          const uploaded = await uploadAudio(user.id, music.file);
+          streamUrl = uploaded.url;
+          uploadedAudioPath = uploaded.path;
+        }
+        musicFields = {
+          music_track_id: music.id,
+          music_title: music.title,
+          music_artist: music.user.name,
+          music_stream_url: streamUrl,
+          music_artwork_url: music.artwork?.['150x150'] ?? music.artwork?.['480x480'] ?? null,
+          music_start_seconds: music.startSeconds ?? 0,
+          music_source: music.source ?? 'audius',
+        };
       }
+
+      const { error: insertError } = await supabase.from('posts').insert({
+        user_id: user.id,
+        media_url: url,
+        media_type: mediaType,
+        content_origin: 'human',
+        caption: cleanCaption.trim() || null,
+        is_flagged: mod.flagged,
+        visibility,
+        hashtags: extractHashtags(cleanCaption),
+        ...musicFields,
+      });
+      // Do not silently fall back to a legacy schema: that could discard the
+      // selected privacy and moderation fields and accidentally publish a
+      // followers-only/close-friends post as public.
       if (insertError) throw new Error(insertError.message);
       setUploadPct(100);
       onClose();
     } catch (e: any) {
+      // Best-effort cleanup prevents failed posts from leaving orphaned media
+      // in Storage and silently consuming the project's quota.
+      const removals: Promise<unknown>[] = [];
+      if (uploadedMediaPath) removals.push(supabase.storage.from('media').remove([uploadedMediaPath]));
+      if (uploadedAudioPath) removals.push(supabase.storage.from('media').remove([uploadedAudioPath]));
+      if (removals.length) await Promise.allSettled(removals);
       setError(e?.message ?? 'Upload failed. Check Storage buckets.');
     } finally {
       window.clearInterval(tick);
@@ -138,7 +183,7 @@ export default function CreatePostModal({ onClose }: { onClose: () => void }) {
     }
   };
 
-  // ── Full-screen TikTok-style shell ──────────────────────────────────────
+  // Contrest's focused creation workspace
   return (
     <div className="fixed inset-0 z-50 bg-black text-white flex flex-col">
       {/* Top bar */}
@@ -169,7 +214,7 @@ export default function CreatePostModal({ onClose }: { onClose: () => void }) {
             onClick={submit}
             disabled={submitting || !file}
             className="px-4 py-1.5 rounded-full text-sm font-bold disabled:opacity-40"
-            style={{ background: 'linear-gradient(135deg, #ff0050, #a855f7)' }}
+            style={{ background: 'linear-gradient(135deg, var(--accent-600), var(--accent-500))' }}
           >
             {submitting ? progress ?? '…' : 'Post'}
           </button>
@@ -178,7 +223,7 @@ export default function CreatePostModal({ onClose }: { onClose: () => void }) {
         )}
       </header>
 
-      {/* CAPTURE step — TikTok camera / gallery landing */}
+      {/* Capture step — Contrest creation landing */}
       {step === 'capture' && (
         <div className="flex-1 flex flex-col relative">
           <div className="flex-1 bg-neutral-950 flex flex-col items-center justify-center px-6">
@@ -199,19 +244,19 @@ export default function CreatePostModal({ onClose }: { onClose: () => void }) {
               <div className="relative z-10 flex flex-col items-center gap-4 px-6 text-center">
                 <div
                   className="w-20 h-20 rounded-full flex items-center justify-center"
-                  style={{ background: 'linear-gradient(135deg, #ff0050, #a855f7)', boxShadow: '0 0 40px rgba(255,0,80,0.35)' }}
+                  style={{ background: 'linear-gradient(135deg, var(--accent-600), var(--accent-500))', boxShadow: '0 0 40px color-mix(in srgb, var(--accent-500) 35%, transparent)' }}
                 >
                   <Camera className="w-9 h-9 text-white" />
                 </div>
                 <div>
                   <p className="text-lg font-bold">Upload a photo or video</p>
-                  <p className="text-sm text-neutral-400 mt-1">Up to 50MB · vertical looks best</p>
+                  <p className="text-sm text-neutral-400 mt-1">Photos up to 12MB · videos up to 25MB</p>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Bottom action dock — TikTok style */}
+          {/* Creation actions */}
           <div className="pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3 px-4 bg-black border-t border-white/10">
             <div className="flex items-end justify-center gap-10 mb-4">
               <button
@@ -232,7 +277,7 @@ export default function CreatePostModal({ onClose }: { onClose: () => void }) {
               >
                 <div
                   className="w-[72px] h-[72px] rounded-full p-[3px]"
-                  style={{ background: 'linear-gradient(135deg, #ff0050, #a855f7, #2fb6e8)' }}
+                  style={{ background: 'linear-gradient(135deg, var(--accent-600), var(--accent-500), var(--accent-400))' }}
                 >
                   <div className="w-full h-full rounded-full bg-black flex items-center justify-center border-4 border-black">
                     <div className="w-14 h-14 rounded-full bg-white" />
@@ -262,7 +307,7 @@ export default function CreatePostModal({ onClose }: { onClose: () => void }) {
               </button>
             </div>
             <p className="text-center text-[11px] text-neutral-500">
-              Gallery · Camera · Video — same as TikTok upload
+              Choose a source, then shape it into a post
             </p>
           </div>
 
@@ -303,7 +348,7 @@ export default function CreatePostModal({ onClose }: { onClose: () => void }) {
               <img src={preview} alt="preview" className="absolute inset-0 w-full h-full object-contain" />
             )}
 
-            {/* Side tools — TikTok-like */}
+            {/* Quick creation tools */}
             <div className="absolute right-3 bottom-28 flex flex-col gap-4 z-10">
               {mediaType === 'video' && (
                 <button
@@ -332,7 +377,7 @@ export default function CreatePostModal({ onClose }: { onClose: () => void }) {
                     className="h-full rounded-full transition-all duration-300"
                     style={{
                       width: `${uploadPct}%`,
-                      background: 'linear-gradient(90deg, #ff0050, #a855f7)',
+                      background: 'linear-gradient(90deg, var(--accent-600), var(--accent-500))',
                     }}
                   />
                 </div>
@@ -347,9 +392,15 @@ export default function CreatePostModal({ onClose }: { onClose: () => void }) {
               value={caption}
               onChange={(e) => setCaption(e.target.value)}
               rows={2}
+              maxLength={INPUT_LIMITS.caption}
               placeholder="Add a caption…"
               className="w-full bg-transparent text-sm text-white placeholder:text-neutral-500 resize-none outline-none"
             />
+            {caption.length > INPUT_LIMITS.caption - 200 && (
+              <p className="text-[11px] text-neutral-500 -mt-2">
+                {caption.length}/{INPUT_LIMITS.caption}
+              </p>
+            )}
 
             <div className="flex items-center gap-2">
               <Music2 className="w-4 h-4 text-accent flex-shrink-0" />
@@ -377,7 +428,7 @@ export default function CreatePostModal({ onClose }: { onClose: () => void }) {
                   }`}
                   style={
                     visibility === v.id
-                      ? { background: 'linear-gradient(135deg, #ff0050, #a855f7)' }
+                      ? { background: 'linear-gradient(135deg, var(--accent-600), var(--accent-500))' }
                       : undefined
                   }
                 >

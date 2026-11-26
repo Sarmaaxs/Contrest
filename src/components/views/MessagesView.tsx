@@ -7,6 +7,8 @@ import { useToast } from '@/context/ToastContext';
 import Avatar from '@/components/shared/Avatar';
 import StoriesBar from '@/components/stories/StoriesBar';
 import { uploadAny } from '@/lib/storageProviders';
+import { checkCooldown, formatRetryAfter, sanitizeText, INPUT_LIMITS } from '@/lib/security';
+import { moderateText } from '@/lib/moderation';
 
 type ConversationSummary = {
   id: string;
@@ -40,6 +42,19 @@ const SCHEDULE_PRESETS = [
 ];
 
 
+/** The inbox preview and notifications need a human label for non-text
+ * messages, not the raw stored value — this is the exact bug behind
+ * "I can see the gif link when I send": the conversation list was printing
+ * `content` verbatim, prefix and all, instead of checking what kind of
+ * message it actually is. */
+function formatMessagePreview(content: string | null | undefined): string {
+  if (!content) return 'No messages yet';
+  if (content.startsWith('gif:')) return '🎁 GIF';
+  if (content.startsWith('sticker:')) return `${content.slice(8)} Sticker`;
+  if (content.startsWith('voice:')) return '🎤 Voice message';
+  return content;
+}
+
 const REACTION_GIFS = [
   { id: 'thumbs', label: 'thumbs up', url: 'https://media0.giphy.com/media/111ebonMs90YLu/giphy.gif' },
   { id: 'clap', label: 'clap', url: 'https://media0.giphy.com/media/l0MYC0LjbHqH4YtHO/giphy.gif' },
@@ -65,8 +80,12 @@ const EMOJIS = ['😀', '😃', '😄', '😁', '😆', '😅', '🤣', '😂', 
 
 export default function MessagesView({
   onOpenProfile,
+  initialConversationId,
+  onConversationChange,
 }: {
   onOpenProfile?: (userId: string) => void;
+  initialConversationId?: string;
+  onConversationChange?: (conversationId: string | null) => void;
 } = {}) {
   const { user } = useAuth();
   const toast = useToast();
@@ -159,6 +178,16 @@ export default function MessagesView({
   useEffect(() => {
     loadConversations();
   }, [loadConversations]);
+
+  useEffect(() => {
+    if (initialConversationId && conversations.some((c) => c.id === initialConversationId)) {
+      setActiveId(initialConversationId);
+    }
+  }, [initialConversationId, conversations]);
+
+  useEffect(() => {
+    onConversationChange?.(activeId);
+  }, [activeId, onConversationChange]);
 
   useEffect(() => {
     if (!activeId || !user) return;
@@ -309,7 +338,19 @@ export default function MessagesView({
 
   const sendMessage = async (scheduledFor?: Date) => {
     if (!user || !activeId || !draft.trim()) return;
-    const text = draft.trim();
+    const text = sanitizeText(draft.trim(), INPUT_LIMITS.message);
+    // Prevents a scripted flood of DMs to the same thread — same idea as
+    // per-user message rate limiting.
+    const cooldown = checkCooldown(`message-send:${user.id}`, 400);
+    if (!cooldown.allowed) {
+      toast(`Sending too fast — wait ${formatRetryAfter(cooldown.retryAfterMs)}.`);
+      return;
+    }
+    const mod = moderateText(text);
+    if (!mod.allowed) {
+      toast(mod.reason ?? 'That message was blocked by community guidelines.');
+      return;
+    }
     setDraft('');
     setShowSchedule(false);
     clearPeerTyping();
@@ -381,48 +422,12 @@ export default function MessagesView({
         return;
       }
 
-      // Fallback if RPC missing / blocked: direct insert (needs RLS off on conversations)
-      const { data: existing } = await supabase
-        .from('conversation_members')
-        .select('conversation_id')
-        .eq('user_id', user.id);
-
-      const myConvs = (existing ?? []).map((m: any) => m.conversation_id);
-      if (myConvs.length) {
-        const { data: hit } = await supabase
-          .from('conversation_members')
-          .select('conversation_id')
-          .eq('user_id', otherUserId)
-          .in('conversation_id', myConvs)
-          .limit(1);
-        if (hit?.[0]?.conversation_id) {
-          setSearchQuery('');
-          setSearchResults([]);
-          setActiveId(hit[0].conversation_id);
-          return;
-        }
-      }
-
-      const { data: conv, error: cErr } = await supabase
-        .from('conversations')
-        .insert({})
-        .select('id')
-        .single();
-
-      if (cErr || !conv) {
-        toast('Could not start this chat. Please try again.');
-        return;
-      }
-
-      await supabase.from('conversation_members').insert([
-        { conversation_id: conv.id, user_id: user.id },
-        { conversation_id: conv.id, user_id: otherUserId },
-      ]);
-
-      setSearchQuery('');
-      setSearchResults([]);
-      await loadConversations();
-      setActiveId(conv.id);
+      // start_dm is the single, server-authorized path for creating or
+      // finding a DM (it runs as SECURITY DEFINER after validating the
+      // caller). There is intentionally no client-side fallback that
+      // inserts membership rows directly — that used to bypass RLS
+      // authorization checks entirely.
+      toast(error?.message || 'Could not start this chat. Please try again.');
     } catch (e: any) {
       toast(e?.message || 'Message failed');
     }
@@ -430,12 +435,37 @@ export default function MessagesView({
 
 
 
+  const [gifError, setGifError] = useState<string | null>(null);
+  const [gifLoading, setGifLoading] = useState(false);
+
   const loadGifs = async (q: string) => {
-    const qq = (q || '').toLowerCase().trim();
-    const filtered = qq
-      ? REACTION_GIFS.filter((g) => g.label.toLowerCase().includes(qq) || g.id.includes(qq))
-      : REACTION_GIFS;
-    setGifs((filtered.length ? filtered : REACTION_GIFS).map((g) => ({ id: g.id, url: g.url })));
+    setGifLoading(true);
+    setGifError(null);
+    try {
+      const { data, error } = await supabase.functions.invoke('giphy-search', { body: { q } });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      const results = (data?.gifs ?? []).map((g: { id: string; url: string }) => ({ id: g.id, url: g.url }));
+      if (results.length === 0) {
+        // Real search returned nothing (or the function isn't deployed yet)
+        // — fall back to the small built-in set instead of a dead-empty
+        // panel, and say so instead of pretending it's a real result.
+        const qq = q.toLowerCase().trim();
+        const filtered = qq
+          ? REACTION_GIFS.filter((g) => g.label.toLowerCase().includes(qq))
+          : REACTION_GIFS;
+        setGifs((filtered.length ? filtered : REACTION_GIFS).map((g) => ({ id: g.id, url: g.url })));
+      } else {
+        setGifs(results);
+      }
+    } catch {
+      setGifError("Live GIF search isn't set up yet — showing a small built-in set instead.");
+      const qq = q.toLowerCase().trim();
+      const filtered = qq ? REACTION_GIFS.filter((g) => g.label.toLowerCase().includes(qq)) : REACTION_GIFS;
+      setGifs((filtered.length ? filtered : REACTION_GIFS).map((g) => ({ id: g.id, url: g.url })));
+    } finally {
+      setGifLoading(false);
+    }
   };
 
   const sendGif = async (url: string) => {
@@ -551,20 +581,13 @@ export default function MessagesView({
 
   const createGroup = async () => {
     if (!user || groupPick.length < 1) return;
-    // Create via start_dm with first member then add rest
-    const first = groupPick[0];
-    const { data: convId, error } = await supabase.rpc('start_dm', {
-      other_user_id: first.id,
+    // Create a fresh group atomically; start_dm can return an existing DM.
+    const { data: convId, error } = await supabase.rpc('create_group_conversation', {
+      member_ids: groupPick.map((profile) => profile.id),
     });
     if (error || !convId) {
       toast(error?.message || 'Could not create group');
       return;
-    }
-    for (const p of groupPick.slice(1)) {
-      await supabase.from('conversation_members').insert({
-        conversation_id: convId,
-        user_id: p.id,
-      });
     }
     const title = groupTitle.trim() || groupPick.map((p) => p.username).slice(0, 3).join(', ');
     await supabase.from('messages').insert({
@@ -585,7 +608,7 @@ export default function MessagesView({
 
   return (
     <div className="h-screen flex app-glow-bg text-white">
-      {/* Conversation list — Instagram-style inbox */}
+      {/* Conversation list — platform-style inbox */}
       <div className={`${activeId ? 'hidden md:flex' : 'flex'} flex-col w-full md:w-80 border-r border-white/10 glass`}>
         <div className="p-4 border-b border-white/10">
           <div className="flex items-center justify-between mb-3">
@@ -663,7 +686,7 @@ export default function MessagesView({
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium text-white truncate">{c.otherUser?.full_name}</p>
                   <p className="text-xs text-neutral-400 truncate">
-                    {c.lastMessage ? c.lastMessage.content : 'No messages yet'}
+                    {formatMessagePreview(c.lastMessage?.content)}
                   </p>
                 </div>
               </button>
@@ -672,7 +695,7 @@ export default function MessagesView({
         )}
       </div>
 
-      {/* Active conversation — Messenger-style chat */}
+      {/* Active conversation */}
       <div className={`${activeId ? 'flex' : 'hidden md:flex'} flex-1 flex-col`}>
         {activeConv ? (
           <>
@@ -737,7 +760,7 @@ export default function MessagesView({
                           Sending {new Date(m.scheduled_for!).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
                         </span>
                       ) : mine ? (
-                        /* Telegram-style ticks: 1 = sent, 2 = seen */
+                        /* Read-state ticks: one = sent, two = seen */
                         <span
                           className="flex items-center justify-end gap-0.5 mt-1 select-none"
                           title={seen ? 'Seen' : 'Sent'}
@@ -823,6 +846,8 @@ export default function MessagesView({
                         className="w-full mb-2 px-3 py-2 rounded-full glass-input text-sm"
                         autoFocus
                       />
+                      {gifError && <p className="text-[11px] text-amber-400/80 mb-1.5">{gifError}</p>}
+                      {gifLoading && <p className="text-[11px] text-neutral-500 mb-1.5">Searching…</p>}
                       <div className="grid grid-cols-4 gap-1.5">
                         {(gifs.length ? gifs : REACTION_GIFS.map((g) => ({ id: g.id, url: g.url }))).map((g) => (
                           <button
@@ -911,6 +936,7 @@ export default function MessagesView({
                     onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && sendMessage()}
                     onBlur={clearPeerTyping}
                     placeholder="Message…"
+                    maxLength={INPUT_LIMITS.message}
                     className="flex-1 px-4 py-2.5 rounded-full glass-input text-sm"
                   />
                 )}

@@ -15,6 +15,13 @@ export type AudiusTrack = {
   mood?: string | null;
   permalink?: string;
   streamUrl: string;
+  /** Where in the track (seconds) the attached clip should start playing from. */
+  startSeconds?: number;
+  /** 'audius' = catalog track, 'custom' = the person's own uploaded sound. */
+  source?: 'audius' | 'custom';
+  /** Only set for a not-yet-uploaded custom file, carried in memory until
+   * the post is actually submitted — never sent to the database. */
+  file?: File;
 };
 
 type RawTrack = {

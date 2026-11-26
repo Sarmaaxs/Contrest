@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Music, Search, X, Play, Pause, Check, Loader2 } from 'lucide-react';
+import { Music, Search, X, Play, Pause, Check, Loader2, Upload, Scissors } from 'lucide-react';
 import {
   searchAudiusTracks,
   getTrendingAudiusTracks,
@@ -7,6 +7,9 @@ import {
   resolveStreamUrl,
   type AudiusTrack,
 } from '@/lib/audius';
+
+const CLIP_SECONDS = 15; // matches the short-form clip default
+const MAX_CUSTOM_AUDIO_BYTES = 8 * 1024 * 1024;
 
 type Props = {
   selected: AudiusTrack | null;
@@ -21,7 +24,17 @@ export default function MusicSelector({ selected, onSelect, compact }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [playingId, setPlayingId] = useState<string | null>(null);
+  const [loadingId, setLoadingId] = useState<string | null>(null);
+  const [customError, setCustomError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  // Bumped on every play/pause request so a slow-resolving preview from an
+  // earlier click can't clobber a later one — this was the root cause of
+  // "pause doesn't work": clicking play, then quickly clicking pause before
+  // the stream URL finished resolving, was treated as a second "play"
+  // because `playingId` hadn't updated yet, leaving two audio elements
+  // racing each other with only one ever getting paused.
+  const requestIdRef = useRef(0);
 
   const load = async (q: string) => {
     setLoading(true);
@@ -50,37 +63,120 @@ export default function MusicSelector({ selected, onSelect, compact }: Props) {
     };
   }, []);
 
+  // Also stop playback the instant the picker closes (X button, backdrop
+  // tap, or picking a track) — belt-and-braces alongside stopPreview() so a
+  // preview can never keep playing once the sheet is gone.
+  useEffect(() => {
+    if (!open) audioRef.current?.pause();
+  }, [open]);
+
+  const stopPreview = () => {
+    audioRef.current?.pause();
+    audioRef.current = null;
+    setPlayingId(null);
+    setLoadingId(null);
+    requestIdRef.current++;
+  };
+
   const togglePreview = async (track: AudiusTrack) => {
-    if (playingId === track.id) {
-      audioRef.current?.pause();
-      setPlayingId(null);
+    // Already playing (or loading) this exact track — pause/cancel it, full stop.
+    if (playingId === track.id || loadingId === track.id) {
+      stopPreview();
       return;
     }
+    const myRequest = ++requestIdRef.current;
+    audioRef.current?.pause();
+    audioRef.current = null;
+    setPlayingId(null);
+    setLoadingId(track.id);
     try {
-      audioRef.current?.pause();
       const src = await resolveStreamUrl(track.streamUrl);
+      // A newer click (play a different track, or pause) happened while we
+      // were waiting — drop this stale response instead of racing it.
+      if (myRequest !== requestIdRef.current) return;
       const audio = new Audio(src);
+      audio.onended = () => setPlayingId((cur) => (cur === track.id ? null : cur));
+      audio.onerror = () => setPlayingId((cur) => (cur === track.id ? null : cur));
       audioRef.current = audio;
-      setPlayingId(track.id);
-      audio.onended = () => setPlayingId(null);
-      audio.onerror = () => setPlayingId(null);
       await audio.play();
+      if (myRequest !== requestIdRef.current) {
+        audio.pause();
+        return;
+      }
+      setLoadingId(null);
+      setPlayingId(track.id);
     } catch {
-      setPlayingId(null);
+      if (myRequest === requestIdRef.current) {
+        setLoadingId(null);
+        setPlayingId(null);
+      }
     }
   };
 
   const pick = (track: AudiusTrack) => {
-    audioRef.current?.pause();
-    setPlayingId(null);
-    onSelect(track);
+    stopPreview();
+    onSelect({ ...track, startSeconds: 0, source: 'audius' });
     setOpen(false);
   };
 
   const clear = () => {
-    audioRef.current?.pause();
-    setPlayingId(null);
+    stopPreview();
     onSelect(null);
+  };
+
+  const pickCustomFile = (file: File | null) => {
+    setCustomError(null);
+    if (!file) return;
+    if (!file.type.startsWith('audio/')) {
+      setCustomError('Choose an audio file (MP3, M4A, WAV, OGG, AAC).');
+      return;
+    }
+    if (file.size > MAX_CUSTOM_AUDIO_BYTES) {
+      setCustomError('Audio clip must be under 8MB.');
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    const probe = new Audio(url);
+    probe.onloadedmetadata = () => {
+      onSelect({
+        id: `custom-${Date.now()}`,
+        title: file.name.replace(/\.[^.]+$/, ''),
+        user: { name: 'Your upload' },
+        duration: Math.round(probe.duration || 0),
+        streamUrl: url,
+        startSeconds: 0,
+        source: 'custom',
+        file,
+      });
+      setOpen(false);
+    };
+    probe.onerror = () => setCustomError("Couldn't read that audio file.");
+  };
+
+  const setTrimStart = (startSeconds: number) => {
+    if (!selected) return;
+    onSelect({ ...selected, startSeconds });
+  };
+
+  /** Play a short preview starting at the chosen trim point, so the person
+   * can hear exactly what will be attached before posting. */
+  const previewTrim = async (track: AudiusTrack) => {
+    try {
+      stopPreview();
+      const src = track.source === 'custom' ? track.streamUrl : await resolveStreamUrl(track.streamUrl);
+      const audio = new Audio(src);
+      audio.currentTime = track.startSeconds ?? 0;
+      audioRef.current = audio;
+      await audio.play();
+      setTimeout(() => {
+        if (audioRef.current === audio) {
+          audio.pause();
+          audioRef.current = null;
+        }
+      }, CLIP_SECONDS * 1000);
+    } catch {
+      /* preview is best-effort */
+    }
   };
 
   return (
@@ -121,7 +217,43 @@ export default function MusicSelector({ selected, onSelect, compact }: Props) {
             <X className="w-4 h-4" />
           </button>
         </div>
-      ) : (
+      ) : null}
+
+      {/* Trim — pick which 15s of the track actually plays, instead of
+          always attaching the whole song from 0:00. Same idea as
+          short-form clip trimmer. */}
+      {selected && selected.duration > CLIP_SECONDS && (
+        <div className="mt-2 rounded-xl glass px-3 py-2.5">
+          <div className="flex items-center gap-1.5 mb-1.5 text-xs text-neutral-400">
+            <Scissors className="w-3.5 h-3.5" />
+            Trim — using {formatDuration(Math.min(CLIP_SECONDS, selected.duration))} starting at{' '}
+            {formatDuration(selected.startSeconds ?? 0)}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => previewTrim(selected)}
+              className="p-1.5 rounded-full bg-white/10 hover:bg-white/20 shrink-0"
+              aria-label="Preview trimmed clip"
+            >
+              <Play className="w-3.5 h-3.5 text-white" />
+            </button>
+            <input
+              type="range"
+              min={0}
+              max={Math.max(0, Math.floor(selected.duration - CLIP_SECONDS))}
+              step={1}
+              value={Math.min(selected.startSeconds ?? 0, Math.max(0, selected.duration - CLIP_SECONDS))}
+              onChange={(e) => setTrimStart(Number(e.target.value))}
+              onMouseUp={() => previewTrim(selected)}
+              onTouchEnd={() => previewTrim(selected)}
+              className="w-full accent-accent"
+            />
+          </div>
+        </div>
+      )}
+
+      {!selected && (
         <button
           type="button"
           onClick={() => setOpen(true)}
@@ -141,8 +273,7 @@ export default function MusicSelector({ selected, onSelect, compact }: Props) {
               <button
                 type="button"
                 onClick={() => {
-                  audioRef.current?.pause();
-                  setPlayingId(null);
+                  stopPreview();
                   setOpen(false);
                 }}
                 className="p-1.5 rounded-lg hover:bg-white/10"
@@ -165,6 +296,29 @@ export default function MusicSelector({ selected, onSelect, compact }: Props) {
               <p className="text-[11px] text-neutral-500 mt-2">
                 Preview a track, then tap to attach it to your post.
               </p>
+
+              {/* Can't find a specific mainstream song? The catalog above is
+                  independent/creative-commons only — we can't legally ship
+                  major-label tracks without a licensing deal (that's the
+                  licensing arrangements used by major platforms
+                  labels). Uploading your own clip sidesteps that: it's the
+                  an original-sound workflow. */}
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="mt-2 w-full flex items-center justify-center gap-2 rounded-xl border border-dashed border-white/15 px-3 py-2.5 text-xs font-medium text-neutral-300 hover:text-white hover:bg-white/5"
+              >
+                <Upload className="w-3.5 h-3.5" />
+                Upload your own sound instead
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="audio/*"
+                className="hidden"
+                onChange={(e) => pickCustomFile(e.target.files?.[0] ?? null)}
+              />
+              {customError && <p className="text-[11px] text-red-400 mt-1.5">{customError}</p>}
             </div>
 
             <div className="flex-1 overflow-y-auto px-2 pb-4 min-h-0">
@@ -200,6 +354,8 @@ export default function MusicSelector({ selected, onSelect, compact }: Props) {
                         ) : null}
                         {isPlaying ? (
                           <Pause className="w-3.5 h-3.5 relative z-10 text-white" />
+                        ) : loadingId === t.id ? (
+                          <Loader2 className="w-3.5 h-3.5 relative z-10 text-white animate-spin" />
                         ) : (
                           <Play className="w-3.5 h-3.5 relative z-10 text-white" />
                         )}

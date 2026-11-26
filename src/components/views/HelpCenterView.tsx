@@ -96,12 +96,15 @@ export default function HelpCenterView({ onBack }: { onBack: () => void }) {
         </div>
 
         <a
-          href="mailto:hezkiastadese@gmail.com"
+          href="mailto:hezkiastadese@gmail.com,supportsarmaxstream@gmail.com"
           className="mt-6 w-full flex items-center gap-3 px-4 py-3 rounded-xl glass hover:bg-white/[0.08] text-left text-neutral-200"
         >
           <span className="text-neutral-400 text-sm">✉</span>
           <span className="text-sm font-medium flex-1">Still stuck? Email support</span>
         </a>
+        <p className="text-[11px] text-neutral-600 text-center mt-2">
+          hezkiastadese@gmail.com · supportsarmaxstream@gmail.com
+        </p>
       </div>
     </div>
   );

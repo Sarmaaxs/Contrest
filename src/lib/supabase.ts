@@ -4,17 +4,25 @@ const url = import.meta.env.VITE_SUPABASE_URL;
 const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 if (!url || !anonKey) {
+  // This screen is public-facing — any visitor to a misconfigured deploy
+  // sees it, not just you. It used to name the exact env var names and
+  // hosting providers, which hands a random visitor free info about your
+  // stack for no benefit to them. The actionable detail now only goes to
+  // the browser console, where a developer (you) would actually look.
+  console.error(
+    'Contrest: missing VITE_SUPABASE_URL and/or VITE_SUPABASE_ANON_KEY. ' +
+      'Set them in .env locally, or in your host\'s environment variables settings, then redeploy.'
+  );
   document.body.innerHTML = `
     <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0a0a0f;color:#fff;font-family:system-ui,sans-serif;padding:24px;text-align:center;">
       <div style="max-width:380px;">
-        <h1 style="font-size:18px;font-weight:600;margin:0 0 8px;">Missing Supabase configuration</h1>
+        <h1 style="font-size:18px;font-weight:600;margin:0 0 8px;">Contrest is temporarily unavailable</h1>
         <p style="font-size:13px;color:#999;line-height:1.5;margin:0;">
-          VITE_SUPABASE_URL and/or VITE_SUPABASE_ANON_KEY aren't set. Locally, add them to a <code>.env</code> file and restart the dev server.
-          On Netlify/Vercel/Cloudflare, add them in the project's environment variables settings and redeploy.
+          We're working on it — please check back shortly.
         </p>
       </div>
     </div>`;
-  throw new Error('Missing VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY');
+  throw new Error('Missing app configuration');
 }
 
 export const supabase = createClient(url, anonKey, {
@@ -65,6 +73,8 @@ export type Post = {
   music_artist?: string | null;
   music_stream_url?: string | null;
   music_artwork_url?: string | null;
+  music_start_seconds?: number | null;
+  music_source?: 'audius' | 'custom' | null;
   profiles?: Profile;
 };
 

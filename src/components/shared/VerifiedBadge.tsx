@@ -1,4 +1,4 @@
-/** TikTok-style verified badge — cyan/blue circle + white check */
+/** Contrest verified badge — cyan/blue circle + white check */
 
 type Size = 'xs' | 'sm' | 'md' | 'lg';
 

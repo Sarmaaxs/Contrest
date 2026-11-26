@@ -13,6 +13,11 @@ import {
   Camera,
   Check,
   X,
+  ArrowLeft,
+  MessageCircle,
+  Share2,
+  Repeat2,
+  Trash2,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import type { Post, Profile } from '@/lib/supabase';
@@ -23,6 +28,7 @@ import Avatar from '@/components/shared/Avatar';
 import { isVerified } from '@/lib/verified';
 import VerifiedBadge from '@/components/shared/VerifiedBadge';
 import ReportBlockMenu from '@/components/moderation/ReportBlockMenu';
+import ShareSheet from '@/components/shared/ShareSheet';
 import { validateMediaFile } from '@/lib/upload';
 import { uploadAny } from '@/lib/storageProviders';
 
@@ -53,7 +59,7 @@ export default function ProfileView({
   const [saved, setSaved] = useState<Post[]>([]);
   const [followers, setFollowers] = useState(0);
   const [following, setFollowing] = useState(0);
-  const [tab, setTab] = useState<'posts' | 'videos' | 'saved'>('posts');
+  const [tab, setTab] = useState<'posts' | 'videos' | 'saved' | 'reposts'>('posts');
   const [editing, setEditing] = useState(false);
   const [editForm, setEditForm] = useState({ fullName: '', username: '', bio: '' });
   const [saving, setSaving] = useState(false);
@@ -67,6 +73,19 @@ export default function ProfileView({
   const [followListRows, setFollowListRows] = useState<Profile[]>([]);
   const [followListLoading, setFollowListLoading] = useState(false);
   const [selectedPost, setSelectedPost] = useState<Post | null>(null);
+  const [postStats, setPostStats] = useState<{
+    likeCount: number;
+    liked: boolean;
+    commentCount: number;
+    comments: { id: string; content: string; profiles?: { username: string } | null }[];
+    bookmarked: boolean;
+    repostCount: number;
+    reposted: boolean;
+  } | null>(null);
+  const [showPostComments, setShowPostComments] = useState(false);
+  const [postCommentDraft, setPostCommentDraft] = useState('');
+  const [sharePostId, setSharePostId] = useState<string | null>(null);
+  const [reposts, setReposts] = useState<Post[]>([]);
 
   const loadProfileData = useCallback(async () => {
     if (!targetId) return;
@@ -81,14 +100,20 @@ export default function ProfileView({
       p = profile;
     }
 
-    const [postsRes, followersRes, followingRes] = await Promise.all([
+    const [postsRes, followersRes, followingRes, repostsRes] = await Promise.all([
       supabase.from('posts').select('*').eq('user_id', targetId).order('created_at', { ascending: false }),
       supabase.from('follows').select('follower_id', { count: 'exact', head: true }).eq('following_id', targetId),
       supabase.from('follows').select('following_id', { count: 'exact', head: true }).eq('follower_id', targetId),
+      supabase
+        .from('reposts')
+        .select('created_at, posts(*)')
+        .eq('user_id', targetId)
+        .order('created_at', { ascending: false }),
     ]);
     setPosts((postsRes.data as Post[]) ?? []);
     setFollowers(followersRes.count ?? 0);
     setFollowing(followingRes.count ?? 0);
+    setReposts(((repostsRes.data as any[]) ?? []).map((r) => r.posts as Post).filter(Boolean));
 
     if (initialPostId) {
       const target = (postsRes.data as Post[] | null)?.find((p) => p.id === initialPostId);
@@ -283,6 +308,113 @@ export default function ProfileView({
     if (!error) {
       setPosts((prev) => prev.filter((p) => p.id !== postId));
       setSelectedPost((sp) => (sp?.id === postId ? null : sp));
+    }
+  };
+
+  // The post grid used to open a small modal with zero engagement info —
+  // no like count, no way to comment, nothing — even though this exact data
+  // is one tap away in the main feed. Fetch it the moment a post opens.
+  useEffect(() => {
+    if (!selectedPost || !user) {
+      setPostStats(null);
+      return;
+    }
+    setShowPostComments(false);
+    setPostCommentDraft('');
+    let cancelled = false;
+    (async () => {
+      const [{ data: likes }, { data: comments }, { data: bookmark }, { data: reposts }] = await Promise.all([
+        supabase.from('likes').select('user_id').eq('post_id', selectedPost.id),
+        supabase
+          .from('comments')
+          .select('id, content, profiles:user_id(username)')
+          .eq('post_id', selectedPost.id)
+          .order('created_at', { ascending: true }),
+        supabase.from('bookmarks').select('post_id').eq('post_id', selectedPost.id).eq('user_id', user.id).maybeSingle(),
+        supabase.from('reposts').select('user_id').eq('post_id', selectedPost.id),
+      ]);
+      if (cancelled) return;
+      setPostStats({
+        likeCount: likes?.length ?? 0,
+        liked: !!likes?.some((l) => l.user_id === user.id),
+        commentCount: comments?.length ?? 0,
+        comments: (comments as any[]) ?? [],
+        bookmarked: !!bookmark,
+        repostCount: reposts?.length ?? 0,
+        reposted: !!reposts?.some((r) => r.user_id === user.id),
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedPost, user]);
+
+  const togglePostLike = async () => {
+    if (!user || !selectedPost || !postStats) return;
+    const wasLiked = postStats.liked;
+    setPostStats({ ...postStats, liked: !wasLiked, likeCount: postStats.likeCount + (wasLiked ? -1 : 1) });
+    if (wasLiked) {
+      await supabase.from('likes').delete().eq('post_id', selectedPost.id).eq('user_id', user.id);
+    } else {
+      await supabase.from('likes').insert({ post_id: selectedPost.id, user_id: user.id });
+      if (selectedPost.user_id !== user.id) {
+        await notify({
+          user_id: selectedPost.user_id,
+          actor_id: user.id,
+          type: 'like',
+          post_id: selectedPost.id,
+          message: 'liked your post',
+        });
+      }
+    }
+  };
+
+  const togglePostBookmark = async () => {
+    if (!user || !selectedPost || !postStats) return;
+    const was = postStats.bookmarked;
+    setPostStats({ ...postStats, bookmarked: !was });
+    if (was) {
+      await supabase.from('bookmarks').delete().eq('post_id', selectedPost.id).eq('user_id', user.id);
+    } else {
+      await supabase.from('bookmarks').insert({ post_id: selectedPost.id, user_id: user.id });
+    }
+  };
+
+  const togglePostRepost = async () => {
+    if (!user || !selectedPost || !postStats) return;
+    const was = postStats.reposted;
+    setPostStats({ ...postStats, reposted: !was, repostCount: postStats.repostCount + (was ? -1 : 1) });
+    if (was) {
+      await supabase.from('reposts').delete().eq('post_id', selectedPost.id).eq('user_id', user.id);
+    } else {
+      await supabase.from('reposts').insert({ post_id: selectedPost.id, user_id: user.id });
+    }
+  };
+
+  const submitPostComment = async () => {
+    if (!user || !selectedPost || !postCommentDraft.trim()) return;
+    const content = postCommentDraft.trim().slice(0, 500);
+    setPostCommentDraft('');
+    const { data } = await supabase
+      .from('comments')
+      .insert({ post_id: selectedPost.id, user_id: user.id, content })
+      .select('id, content, profiles:user_id(username)')
+      .single();
+    if (data && postStats) {
+      setPostStats({
+        ...postStats,
+        commentCount: postStats.commentCount + 1,
+        comments: [...postStats.comments, data as any],
+      });
+    }
+    if (selectedPost.user_id !== user.id) {
+      await notify({
+        user_id: selectedPost.user_id,
+        actor_id: user.id,
+        type: 'comment',
+        post_id: selectedPost.id,
+        message: 'commented on your post',
+      });
     }
   };
 
@@ -486,6 +618,9 @@ export default function ProfileView({
           <div className="border-t border-white/10 flex justify-center gap-12 mb-4">
             <TabButton icon={<Grid3x3 className="w-4 h-4" />} label="Posts" active={tab === 'posts'} onClick={() => setTab('posts')} />
             <TabButton icon={<Video className="w-4 h-4" />} label="Videos" active={tab === 'videos'} onClick={() => setTab('videos')} />
+            {reposts.length > 0 && (
+              <TabButton icon={<Repeat2 className="w-4 h-4" />} label="Reposts" active={tab === 'reposts'} onClick={() => setTab('reposts')} />
+            )}
             {isSelf && (
               <TabButton icon={<Bookmark className="w-4 h-4" />} label="Saved" active={tab === 'saved'} onClick={() => setTab('saved')} />
             )}
@@ -497,6 +632,8 @@ export default function ProfileView({
             ) : (
               <Grid posts={saved} canDelete={false} onOpen={setSelectedPost} />
             )
+          ) : tab === 'reposts' ? (
+            <Grid posts={reposts} canDelete={false} onOpen={setSelectedPost} />
           ) : filteredPosts.length === 0 ? (
             <Empty icon={<Heart className="w-10 h-10 text-neutral-600" />} text="No posts yet." />
           ) : (
@@ -594,51 +731,120 @@ export default function ProfileView({
       )}
 
       {selectedPost && (
-        <div
-          className="fixed inset-0 z-50 bg-black/85 flex items-center justify-center p-2 md:p-6"
-          onClick={() => setSelectedPost(null)}
-        >
-          <div
-            className="glass-strong rounded-2xl w-full max-w-md max-h-[92vh] flex flex-col overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
+        <div className="fixed inset-0 z-50 bg-black">
+          <button
+            onClick={() => setSelectedPost(null)}
+            className="absolute top-3 left-3 z-20 p-2 rounded-full bg-black/40 backdrop-blur hover:bg-black/60"
+            aria-label="Back"
           >
-            <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
-              <div className="flex items-center gap-2">
-                <Avatar url={display?.avatar_url} name={display?.username} size="sm" verified={isVerified(display)} />
-                <span className="text-sm font-medium text-white flex items-center gap-1">
-                  @{display?.username}
-                  {isVerified(display) && <VerifiedBadge size="sm" />}
-                </span>
-              </div>
-              <button onClick={() => setSelectedPost(null)} className="p-1 hover:bg-white/10 rounded-full">
-                <X className="w-4 h-4 text-neutral-300" />
-              </button>
-            </div>
-            <div className="bg-black flex items-center justify-center max-h-[60vh] overflow-hidden">
-              {selectedPost.media_type === 'video' ? (
-                <video src={selectedPost.media_url} controls autoPlay className="max-h-[60vh] w-full object-contain" />
-              ) : (
-                <img src={selectedPost.media_url} alt={selectedPost.caption ?? ''} className="max-h-[60vh] w-full object-contain" />
-              )}
-            </div>
-            <div className="p-4 overflow-y-auto">
-              {selectedPost.caption && <p className="text-sm text-neutral-100 mb-2">{selectedPost.caption}</p>}
-              {selectedPost.hashtags && selectedPost.hashtags.length > 0 && (
-                <p className="text-xs text-accent mb-2">{selectedPost.hashtags.map((h) => `#${h}`).join(' ')}</p>
-              )}
-              <p className="text-xs text-neutral-500">{new Date(selectedPost.created_at).toLocaleString()}</p>
-              {isSelf && (
-                <button
-                  type="button"
-                  onClick={() => deleteOwnPost(selectedPost.id)}
-                  className="mt-3 text-xs font-medium text-red-400 hover:text-red-300"
-                >
-                  Delete post
-                </button>
-              )}
-            </div>
+            <ArrowLeft className="w-5 h-5 text-white" />
+          </button>
+          {isSelf && (
+            <button
+              onClick={() => deleteOwnPost(selectedPost.id)}
+              className="absolute top-3 right-3 z-20 p-2 rounded-full bg-black/40 backdrop-blur hover:bg-red-500/60"
+              aria-label="Delete post"
+            >
+              <Trash2 className="w-5 h-5 text-white" />
+            </button>
+          )}
+
+          <div className="absolute inset-0 flex items-center justify-center">
+            {selectedPost.media_type === 'video' ? (
+              <video src={selectedPost.media_url} controls autoPlay playsInline className="max-h-full max-w-full" />
+            ) : (
+              <img
+                src={selectedPost.media_url}
+                alt={selectedPost.caption ?? ''}
+                className="absolute inset-0 w-full h-full object-cover"
+              />
+            )}
           </div>
+
+          <div className="absolute bottom-0 inset-x-0 h-2/5 bg-gradient-to-t from-black/80 via-black/30 to-transparent pointer-events-none" />
+          <div className="absolute bottom-6 left-4 right-20 text-white">
+            <div className="flex items-center gap-2 mb-2">
+              <Avatar url={display?.avatar_url} name={display?.username} size="sm" ring verified={isVerified(display)} />
+              <span className="font-medium text-sm flex items-center gap-1">
+                @{display?.username}
+                {isVerified(display) && <VerifiedBadge size="sm" />}
+              </span>
+            </div>
+            {selectedPost.caption && <p className="text-sm leading-relaxed line-clamp-3">{selectedPost.caption}</p>}
+            {selectedPost.hashtags && selectedPost.hashtags.length > 0 && (
+              <p className="text-xs text-accent mt-1">{selectedPost.hashtags.map((h) => `#${h}`).join(' ')}</p>
+            )}
+            <p className="text-xs text-white/50 mt-1">{new Date(selectedPost.created_at).toLocaleString()}</p>
+          </div>
+
+          <div className="absolute bottom-6 right-2 flex flex-col items-center gap-4 text-white">
+            <button onClick={togglePostLike} className="flex flex-col items-center gap-1">
+              <Heart className={`w-7 h-7 ${postStats?.liked ? 'fill-red-500 text-red-500' : ''}`} />
+              <span className="text-xs drop-shadow">{postStats?.likeCount ?? 0}</span>
+            </button>
+            <button onClick={() => setShowPostComments(true)} className="flex flex-col items-center gap-1">
+              <MessageCircle className="w-7 h-7" />
+              <span className="text-xs drop-shadow">{postStats?.commentCount ?? 0}</span>
+            </button>
+            <button onClick={togglePostRepost} className="flex flex-col items-center gap-1">
+              <Repeat2 className={`w-7 h-7 ${postStats?.reposted ? 'text-emerald-400' : ''}`} />
+              <span className="text-xs drop-shadow">{postStats?.repostCount ?? 0}</span>
+            </button>
+            <button onClick={() => setSharePostId(selectedPost.id)} className="flex flex-col items-center gap-1">
+              <Share2 className="w-6 h-6" />
+              <span className="text-xs drop-shadow">Share</span>
+            </button>
+            <button onClick={togglePostBookmark}>
+              <Bookmark className={`w-7 h-7 ${postStats?.bookmarked ? 'fill-accent text-accent' : ''}`} />
+            </button>
+          </div>
+
+          {showPostComments && (
+            <div
+              className="fixed inset-0 z-50 bg-black/70 flex flex-col justify-end"
+              onClick={() => setShowPostComments(false)}
+            >
+              <div
+                className="bg-ink-900 rounded-t-2xl max-h-[65vh] flex flex-col border-t border-white/10"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
+                  <span className="text-sm font-medium text-white">Comments</span>
+                  <button type="button" onClick={() => setShowPostComments(false)}>
+                    <X className="w-5 h-5 text-neutral-400" />
+                  </button>
+                </div>
+                <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3 min-h-[120px]">
+                  {(postStats?.comments.length ?? 0) === 0 && (
+                    <p className="text-sm text-neutral-500 text-center py-6">No comments yet — say something</p>
+                  )}
+                  {postStats?.comments.map((c) => (
+                    <div key={c.id} className="text-sm text-neutral-100">
+                      <span className="font-medium">@{c.profiles?.username}</span> {c.content}
+                    </div>
+                  ))}
+                </div>
+                <div className="flex gap-2 p-3 border-t border-white/10 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+                  <input
+                    value={postCommentDraft}
+                    onChange={(e) => setPostCommentDraft(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && submitPostComment()}
+                    placeholder="Add a comment…"
+                    className="flex-1 px-3 py-2.5 rounded-full glass-input text-sm"
+                    autoFocus
+                  />
+                  <button type="button" onClick={submitPostComment} className="text-sm font-semibold text-accent px-3">
+                    Post
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
+      )}
+
+      {sharePostId && (
+        <ShareSheet postId={sharePostId} caption={selectedPost?.caption} onClose={() => setSharePostId(null)} />
       )}
     </div>
   );

@@ -4,6 +4,8 @@ import { Mail, Eye, EyeOff, KeyRound } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import Logo from '@/components/shared/Logo';
 import TermsView from '@/components/views/TermsView';
+import PrivacyPolicyView from '@/components/views/PrivacyPolicyView';
+import { checkPasswordStrength } from '@/lib/security';
 
 type Mode = 'signin' | 'signup' | 'forgot' | 'otp';
 
@@ -12,6 +14,7 @@ export default function AuthScreen() {
   const [mode, setMode] = useState<Mode>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [otp, setOtp] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -19,8 +22,10 @@ export default function AuthScreen() {
   const [fullName, setFullName] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [oauthLoading, setOauthLoading] = useState<'google' | 'github' | null>(null);
   const [checkEmail, setCheckEmail] = useState(false);
   const [showTerms, setShowTerms] = useState(false);
+  const [showPrivacy, setShowPrivacy] = useState(false);
   const [otpInfo, setOtpInfo] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -28,106 +33,136 @@ export default function AuthScreen() {
     setError(null);
     setOtpInfo(null);
 
-    // Step 1 — request recovery OTP (uses your Supabase Auth custom SMTP automatically)
-    if (mode === 'forgot') {
-      if (!email.trim()) {
-        setError('Enter the email on your account.');
+    try {
+      // Step 1 — request recovery OTP (uses your Supabase Auth custom SMTP automatically)
+      if (mode === 'forgot') {
+        if (!email.trim()) {
+          setError('Enter the email on your account.');
+          return;
+        }
+        setSubmitting(true);
+        const { error: resetErr } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+          // OTP flow does not need a deep link; still safe to pass origin
+          redirectTo: window.location.origin,
+        });
+        if (resetErr) {
+          setError(resetErr.message);
+          return;
+        }
+        setMode('otp');
+        setOtp('');
+        setNewPassword('');
+        setOtpInfo('We emailed a one-time code. Enter it below with your new password.');
         return;
       }
-      setSubmitting(true);
-      const { error: resetErr } = await supabase.auth.resetPasswordForEmail(email.trim(), {
-        // OTP flow does not need a deep link; still safe to pass origin
-        redirectTo: window.location.origin,
-      });
-      setSubmitting(false);
-      if (resetErr) {
-        setError(resetErr.message);
-        return;
-      }
-      setMode('otp');
-      setOtp('');
-      setNewPassword('');
-      setOtpInfo('We emailed a one-time code. Enter it below with your new password.');
-      return;
-    }
 
-    // Step 2 — verify OTP + set new password
-    if (mode === 'otp') {
-      const code = otp.replace(/\s/g, '');
-      if (!code || code.length < 6) {
-        setError('Enter the 6-digit code from your email.');
+      // Step 2 — verify OTP + set new password
+      if (mode === 'otp') {
+        const code = otp.replace(/\s/g, '');
+        if (!code || code.length < 6) {
+          setError('Enter the 6-digit code from your email.');
+          return;
+        }
+        if (newPassword.length < 6) {
+          setError('New password must be at least 6 characters.');
+          return;
+        }
+        setSubmitting(true);
+        const { data, error: verifyErr } = await supabase.auth.verifyOtp({
+          email: email.trim(),
+          token: code,
+          type: 'recovery',
+        });
+        if (verifyErr) {
+          setError(verifyErr.message || 'Invalid or expired code. Request a new one.');
+          return;
+        }
+        if (!data.session) {
+          setError('Code accepted but session missing. Try again.');
+          return;
+        }
+        const { error: updateErr } = await supabase.auth.updateUser({ password: newPassword });
+        if (updateErr) {
+          setError(updateErr.message);
+          return;
+        }
+        // Signed in with new password — Root will pick up session
+        setMode('signin');
+        setPassword('');
+        setNewPassword('');
+        setOtp('');
+        setOtpInfo(null);
         return;
       }
-      if (newPassword.length < 6) {
-        setError('New password must be at least 6 characters.');
-        return;
-      }
-      setSubmitting(true);
-      const { data, error: verifyErr } = await supabase.auth.verifyOtp({
-        email: email.trim(),
-        token: code,
-        type: 'recovery',
-      });
-      if (verifyErr) {
-        setSubmitting(false);
-        setError(verifyErr.message || 'Invalid or expired code. Request a new one.');
-        return;
-      }
-      if (!data.session) {
-        setSubmitting(false);
-        setError('Code accepted but session missing. Try again.');
-        return;
-      }
-      const { error: updateErr } = await supabase.auth.updateUser({ password: newPassword });
-      setSubmitting(false);
-      if (updateErr) {
-        setError(updateErr.message);
-        return;
-      }
-      // Signed in with new password — Root will pick up session
-      setMode('signin');
-      setPassword('');
-      setNewPassword('');
-      setOtp('');
-      setOtpInfo(null);
-      return;
-    }
 
-    setSubmitting(true);
-    const result =
-      mode === 'signin'
-        ? await signIn(email, password)
-        : await signUp(email, password, username, fullName);
-    setSubmitting(false);
-    if (result.error) {
-      setError(result.error);
-    } else if ('needsEmailConfirmation' in result && result.needsEmailConfirmation) {
-      setCheckEmail(true);
+      if (mode === 'signup') {
+        if (!/^\S+@\S+\.\S+$/.test(email.trim())) {
+          setError('Enter a valid email address.');
+          return;
+        }
+        if (password !== confirmPassword) {
+          setError("Passwords don't match.");
+          return;
+        }
+      }
+
+      setSubmitting(true);
+      const result =
+        mode === 'signin'
+          ? await signIn(email, password)
+          : await signUp(email, password, username, fullName);
+      if (result.error) {
+        setError(result.error);
+      } else if ('needsEmailConfirmation' in result && result.needsEmailConfirmation) {
+        setCheckEmail(true);
+      }
+    } catch {
+      // A thrown error here means the request never reached Supabase at all
+      // (offline, DNS failure, CORS) — without this catch, `submitting`
+      // would stay true forever and the button would look permanently stuck.
+      setError('Network error — check your connection and try again.');
+    } finally {
+      setSubmitting(false);
     }
   };
 
   const handleOAuth = async (provider: 'google' | 'github') => {
     setError(null);
-    const { error: oauthErr } = await supabase.auth.signInWithOAuth({
-      provider,
-      options: { redirectTo: window.location.origin },
-    });
-    if (oauthErr) setError(oauthErr.message);
+    setOauthLoading(provider);
+    try {
+      const { error: oauthErr } = await supabase.auth.signInWithOAuth({
+        provider,
+        options: { redirectTo: window.location.origin },
+      });
+      if (oauthErr) setError(oauthErr.message);
+    } catch {
+      setError('Network error — check your connection and try again.');
+    } finally {
+      setOauthLoading(null);
+    }
   };
 
   const resendOtp = async () => {
     setError(null);
     setSubmitting(true);
-    const { error: resetErr } = await supabase.auth.resetPasswordForEmail(email.trim(), {
-      redirectTo: window.location.origin,
-    });
-    setSubmitting(false);
-    if (resetErr) setError(resetErr.message);
-    else setOtpInfo('A new code was sent to your email.');
+    try {
+      const { error: resetErr } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+        redirectTo: window.location.origin,
+      });
+      if (resetErr) setError(resetErr.message);
+      else setOtpInfo('A new code was sent to your email.');
+    } catch {
+      setError('Network error — check your connection and try again.');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   if (showTerms) {
     return <TermsView onBack={() => setShowTerms(false)} />;
+  }
+  if (showPrivacy) {
+    return <PrivacyPolicyView onBack={() => setShowPrivacy(false)} />;
   }
 
   return (
@@ -141,9 +176,9 @@ export default function AuthScreen() {
           <h1 className="text-3xl font-semibold tracking-tight text-white">Contrest</h1>
           <p className="text-neutral-400 mt-2 text-center text-sm">
             {mode === 'signin'
-              ? 'Welcome back. Sign in to continue.'
+              ? 'Good to see you again.'
               : mode === 'signup'
-                ? 'Create your account to get started.'
+                ? 'Join and start sharing in under a minute.'
                 : mode === 'otp'
                   ? 'Enter the code from your email.'
                   : 'Reset your password with a one-time code.'}
@@ -177,16 +212,28 @@ export default function AuthScreen() {
                   <button
                     type="button"
                     onClick={() => handleOAuth('google')}
-                    className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg glass text-sm text-neutral-200 hover:bg-white/10"
+                    disabled={oauthLoading !== null}
+                    className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg glass text-sm text-neutral-200 hover:bg-white/10 disabled:opacity-50"
                   >
-                    <GoogleIcon /> Continue with Google
+                    {oauthLoading === 'google' ? (
+                      <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    ) : (
+                      <GoogleIcon />
+                    )}
+                    {oauthLoading === 'google' ? 'Redirecting…' : 'Continue with Google'}
                   </button>
                   <button
                     type="button"
                     onClick={() => handleOAuth('github')}
-                    className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg glass text-sm text-neutral-200 hover:bg-white/10"
+                    disabled={oauthLoading !== null}
+                    className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg glass text-sm text-neutral-200 hover:bg-white/10 disabled:opacity-50"
                   >
-                    <GithubIcon /> Continue with GitHub
+                    {oauthLoading === 'github' ? (
+                      <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    ) : (
+                      <GithubIcon />
+                    )}
+                    {oauthLoading === 'github' ? 'Redirecting…' : 'Continue with GitHub'}
                   </button>
                   <div className="relative my-3">
                     <div className="absolute inset-0 flex items-center">
@@ -269,6 +316,7 @@ export default function AuthScreen() {
                         <button
                           type="button"
                           onClick={() => setShowPassword((v) => !v)}
+                          aria-label={showPassword ? 'Hide password' : 'Show password'}
                           tabIndex={-1}
                           className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-neutral-400 hover:text-neutral-200"
                         >
@@ -296,7 +344,7 @@ export default function AuthScreen() {
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
                         required
-                        minLength={6}
+                        minLength={mode === 'signup' ? 8 : 6}
                         placeholder="••••••••"
                         className="w-full px-3.5 py-2.5 pr-10 rounded-lg glass-input text-sm"
                         autoComplete={mode === 'signin' ? 'current-password' : 'new-password'}
@@ -304,12 +352,35 @@ export default function AuthScreen() {
                       <button
                         type="button"
                         onClick={() => setShowPassword((v) => !v)}
+                          aria-label={showPassword ? 'Hide password' : 'Show password'}
                         tabIndex={-1}
                         className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-neutral-400 hover:text-neutral-200"
                       >
                         {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                       </button>
                     </div>
+                    {mode === 'signup' && password.length > 0 && <PasswordStrengthMeter password={password} />}
+                  </Field>
+                )}
+
+                {mode === 'signup' && (
+                  <Field label="Confirm password">
+                    <input
+                      type={showPassword ? 'text' : 'password'}
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      required
+                      placeholder="••••••••"
+                      className={`w-full px-3.5 py-2.5 rounded-lg glass-input text-sm ${
+                        confirmPassword.length > 0 && confirmPassword !== password
+                          ? 'ring-1 ring-red-500/50'
+                          : ''
+                      }`}
+                      autoComplete="new-password"
+                    />
+                    {confirmPassword.length > 0 && confirmPassword !== password && (
+                      <p className="text-[11px] text-red-400 mt-1">Passwords don't match</p>
+                    )}
                   </Field>
                 )}
 
@@ -328,7 +399,11 @@ export default function AuthScreen() {
                 )}
 
                 {error && (
-                  <div className="text-sm text-red-300 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
+                  <div
+                    role="alert"
+                    aria-live="assertive"
+                    className="text-sm text-red-300 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2"
+                  >
                     {error}
                   </div>
                 )}
@@ -391,9 +466,41 @@ export default function AuthScreen() {
             className="text-neutral-400 hover:text-drop-400 underline underline-offset-2"
           >
             Terms of Service
+          </button>{' '}
+          and{' '}
+          <button
+            onClick={() => setShowPrivacy(true)}
+            className="text-neutral-400 hover:text-drop-400 underline underline-offset-2"
+          >
+            Privacy Policy
           </button>
         </p>
       </div>
+    </div>
+  );
+}
+
+/** GitHub/Dropbox-style live strength meter — nudges toward better passwords
+ * without blocking anything the server-side rules would still accept. */
+function PasswordStrengthMeter({ password }: { password: string }) {
+  const strength = checkPasswordStrength(password);
+  const colors = ['bg-red-500', 'bg-orange-500', 'bg-yellow-500', 'bg-lime-500', 'bg-emerald-500'];
+  return (
+    <div className="mt-1.5">
+      <div className="flex gap-1">
+        {[0, 1, 2, 3].map((i) => (
+          <div
+            key={i}
+            className={`h-1 flex-1 rounded-full transition-colors ${
+              i <= strength.score - 1 ? colors[strength.score] : 'bg-white/10'
+            }`}
+          />
+        ))}
+      </div>
+      <p className="text-[11px] text-neutral-500 mt-1">
+        {strength.label}
+        {strength.reasons.length > 0 ? ` — ${strength.reasons[0]}` : ''}
+      </p>
     </div>
   );
 }

@@ -18,6 +18,7 @@ import {
   Volume2,
   VolumeX,
   Wifi,
+  Clock,
   Heart,
   MessageCircle,
   Type,
@@ -26,6 +27,8 @@ import {
   Trash2,
   HelpCircle,
   Info,
+  ShieldCheck,
+  KeyRound,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
@@ -33,7 +36,17 @@ import { supabase } from '@/lib/supabase';
 import type { LogoVariant, ThemeAccent } from '@/lib/supabase';
 import Logo from '@/components/shared/Logo';
 import TermsView from '@/components/views/TermsView';
+import PrivacyPolicyView from '@/components/views/PrivacyPolicyView';
+import CommunityGuidelinesView from '@/components/views/CommunityGuidelinesView';
 import HelpCenterView from '@/components/views/HelpCenterView';
+import TwoFactorSetup from '@/components/security/TwoFactorSetup';
+import { checkPasswordStrength } from '@/lib/security';
+import {
+  isScreenTimeReminderOn,
+  setScreenTimeReminderOn,
+  getScreenTimeMinutes,
+  setScreenTimeMinutes,
+} from '@/lib/screenTime';
 import {
   getStoredLogoVariant,
   setStoredLogoVariant,
@@ -51,6 +64,8 @@ type Section =
   | 'content'
   | 'messages'
   | 'account'
+  | 'security'
+  | 'password'
   | 'about'
   | 'help';
 
@@ -86,6 +101,8 @@ export default function SettingsView({ onBack }: { onBack: () => void }) {
   const { user, profile, signOut, refreshProfile } = useAuth();
   const toast = useToast();
   const [showTerms, setShowTerms] = useState(false);
+  const [showPrivacy, setShowPrivacy] = useState(false);
+  const [showGuidelines, setShowGuidelines] = useState(false);
   const [isPrivate, setIsPrivate] = useState(!!profile?.is_private);
   const [logoVariant, setLogoVariant] = useState<LogoVariant>(
     getStoredLogoVariant(profile?.logo_variant ?? 'official')
@@ -93,19 +110,25 @@ export default function SettingsView({ onBack }: { onBack: () => void }) {
   const [accent, setAccent] = useState<ThemeAccent>(getStoredAccent(profile?.theme_accent ?? 'purple'));
   const [blocked, setBlocked] = useState<{ id: string; username: string; full_name: string }[]>([]);
   const [section, setSection] = useState<Section>('main');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [pwSubmitting, setPwSubmitting] = useState(false);
+  const [pwError, setPwError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   // Local prefs
   const [typingOn, setTypingOn] = useState(() => getBool(LS.typing, true));
   const [hideLikes, setHideLikes] = useState(() => getBool(LS.hideLikes, false));
   const [quiet, setQuiet] = useState(() => getBool(LS.quiet, false));
   const [dataSaver, setDataSaver] = useState(() => getBool(LS.dataSaver, false));
+  const [screenTimeOn, setScreenTimeOn] = useState(() => isScreenTimeReminderOn());
+  const [screenTimeMinutes, setScreenTimeMinutesState] = useState(() => getScreenTimeMinutes());
   const [nLikes, setNLikes] = useState(() => getBool(LS.notifLikes, true));
   const [nComments, setNComments] = useState(() => getBool(LS.notifComments, true));
   const [nFollows, setNFollows] = useState(() => getBool(LS.notifFollows, true));
   const [nMsgs, setNMsgs] = useState(() => getBool(LS.notifMsgs, true));
   const [msgAnyone, setMsgAnyone] = useState(() => getBool('contrest_msg_anyone', true));
-  const [shareLoc, setShareLoc] = useState(() => getBool('contrest_share_loc', false));
   const [nowPlaying, setNowPlaying] = useState(() => {
     try { return localStorage.getItem('contrest_now_playing') || ''; } catch { return ''; }
   });
@@ -116,7 +139,9 @@ export default function SettingsView({ onBack }: { onBack: () => void }) {
 
   useEffect(() => {
     applyAccent(accent);
-  }, [accent]);
+    document.documentElement.dataset.quiet = quiet ? '1' : '0';
+    document.documentElement.dataset.dataSaver = dataSaver ? '1' : '0';
+  }, [accent, quiet, dataSaver]);
 
   const loadBlocked = async () => {
     if (!user) return;
@@ -133,11 +158,57 @@ export default function SettingsView({ onBack }: { onBack: () => void }) {
   };
 
   const persistProfile = async (patch: Record<string, unknown>) => {
-    if (!user) return;
+    if (!user) return false;
     setSaving(true);
-    await supabase.from('profiles').update(patch).eq('id', user.id);
-    await refreshProfile();
+    const { error } = await supabase.from('profiles').update(patch).eq('id', user.id);
+    if (!error) {
+      await refreshProfile();
+    } else {
+      toast(error.message);
+    }
     setSaving(false);
+    return !error;
+  };
+
+  const exportData = async () => {
+    if (!user || exporting) return;
+    setExporting(true);
+    try {
+      const [profileRes, postsRes, commentsRes, likesRes, followsRes, bookmarksRes] = await Promise.all([
+        supabase.from('profiles').select('*').eq('id', user.id).maybeSingle(),
+        supabase.from('posts').select('*').eq('user_id', user.id),
+        supabase.from('comments').select('*').eq('user_id', user.id),
+        supabase.from('likes').select('*').eq('user_id', user.id),
+        supabase.from('follows').select('*').or(`follower_id.eq.${user.id},following_id.eq.${user.id}`),
+        supabase.from('bookmarks').select('*').eq('user_id', user.id),
+      ]);
+      const firstError = [profileRes, postsRes, commentsRes, likesRes, followsRes, bookmarksRes].find((r) => r.error)?.error;
+      if (firstError) throw new Error(firstError.message);
+
+      const payload = {
+        exported_at: new Date().toISOString(),
+        profile: profileRes.data,
+        posts: postsRes.data ?? [],
+        comments: commentsRes.data ?? [],
+        likes: likesRes.data ?? [],
+        follows: followsRes.data ?? [],
+        bookmarks: bookmarksRes.data ?? [],
+      };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `contrest-data-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast('Your data export is ready');
+    } catch (e: any) {
+      toast(e?.message ?? 'Could not export your data');
+    } finally {
+      setExporting(false);
+    }
   };
 
   const togglePrivate = async () => {
@@ -165,7 +236,33 @@ export default function SettingsView({ onBack }: { onBack: () => void }) {
     setBlocked((prev) => prev.filter((b) => b.id !== id));
   };
 
+  const changePassword = async () => {
+    setPwError(null);
+    const strength = checkPasswordStrength(newPassword);
+    if (strength.score < 2) {
+      setPwError(strength.reasons[0] ?? 'Choose a stronger password.');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setPwError('Passwords do not match.');
+      return;
+    }
+    setPwSubmitting(true);
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    setPwSubmitting(false);
+    if (error) {
+      setPwError(error.message);
+      return;
+    }
+    setNewPassword('');
+    setConfirmPassword('');
+    toast('Password updated');
+    setSection('account');
+  };
+
   if (showTerms) return <TermsView onBack={() => setShowTerms(false)} />;
+  if (showPrivacy) return <PrivacyPolicyView onBack={() => setShowPrivacy(false)} />;
+  if (showGuidelines) return <CommunityGuidelinesView onBack={() => setShowGuidelines(false)} />;
 
   if (section === 'appearance') {
     return (
@@ -199,7 +296,6 @@ export default function SettingsView({ onBack }: { onBack: () => void }) {
           onChange={(v) => {
             setQuiet(v);
             setBool(LS.quiet, v);
-            document.documentElement.dataset.quiet = v ? '1' : '0';
           }}
         />
         {saving && <p className="text-xs text-neutral-500 mt-4 text-center">Saving…</p>}
@@ -291,7 +387,7 @@ export default function SettingsView({ onBack }: { onBack: () => void }) {
       <Shell title="Content & feed" onBack={() => setSection('main')}>
         <div className="glass rounded-xl p-4 mb-2">
           <p className="text-sm font-medium text-white mb-1">Now playing (friends can see)</p>
-          <p className="text-xs text-neutral-500 mb-2">Spotify-style status — type what you&apos;re listening to</p>
+          <p className="text-xs text-neutral-500 mb-2">Now-playing status — type what you&apos;re listening to</p>
           <input
             value={nowPlaying}
             onChange={(e) => setNowPlaying(e.target.value)}
@@ -318,6 +414,34 @@ export default function SettingsView({ onBack }: { onBack: () => void }) {
             setBool(LS.dataSaver, v);
           }}
         />
+        <Toggle
+          icon={<Clock className="w-4 h-4" />}
+          label="Screen time reminders"
+          hint={`Check in after ${screenTimeMinutes} min of scrolling`}
+          value={screenTimeOn}
+          onChange={(v) => {
+            setScreenTimeOn(v);
+            setScreenTimeReminderOn(v);
+          }}
+        />
+        {screenTimeOn && (
+          <div className="flex items-center gap-2 px-4 py-3 -mt-1">
+            {[20, 40, 60].map((m) => (
+              <button
+                key={m}
+                onClick={() => {
+                  setScreenTimeMinutes(m);
+                  setScreenTimeMinutesState(m);
+                }}
+                className={`text-xs font-medium px-3 py-1.5 rounded-full ${
+                  screenTimeMinutes === m ? 'bg-accent text-white' : 'bg-white/5 text-neutral-400 hover:bg-white/10'
+                }`}
+              >
+                {m} min
+              </button>
+            ))}
+          </div>
+        )}
       </Shell>
     );
   }
@@ -352,10 +476,73 @@ export default function SettingsView({ onBack }: { onBack: () => void }) {
     );
   }
 
+  if (section === 'security') {
+    return <TwoFactorSetup onBack={() => setSection('account')} />;
+  }
+
+  if (section === 'password') {
+    return (
+      <Shell
+        title="Change password"
+        onBack={() => setSection('account')}
+        onEnter={() => {
+          setNewPassword('');
+          setConfirmPassword('');
+          setPwError(null);
+        }}
+      >
+        <div className="glass rounded-2xl p-5 space-y-4">
+          <div>
+            <label className="block text-xs font-medium text-neutral-400 mb-1.5">New password</label>
+            <input
+              type="password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              minLength={8}
+              autoComplete="new-password"
+              className="w-full px-3.5 py-2.5 rounded-lg glass-input text-sm"
+            />
+            {newPassword.length > 0 && (
+              <p className="text-[11px] text-neutral-500 mt-1.5">{checkPasswordStrength(newPassword).label}</p>
+            )}
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-neutral-400 mb-1.5">Confirm new password</label>
+            <input
+              type="password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              autoComplete="new-password"
+              className="w-full px-3.5 py-2.5 rounded-lg glass-input text-sm"
+            />
+          </div>
+          {pwError && (
+            <div className="text-sm text-red-300 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
+              {pwError}
+            </div>
+          )}
+          <button
+            onClick={changePassword}
+            disabled={pwSubmitting || !newPassword || !confirmPassword}
+            className="w-full bg-gradient-to-r from-drop-500 to-drop-600 text-white py-2.5 rounded-lg text-sm font-medium hover:brightness-110 disabled:opacity-50"
+          >
+            {pwSubmitting ? 'Updating…' : 'Update password'}
+          </button>
+        </div>
+      </Shell>
+    );
+  }
+
   if (section === 'account') {
     return (
       <Shell title="Account" onBack={() => setSection('main')}>
-        <Row icon={<Download className="w-4 h-4" />} label="Download your data" hint="Coming soon" />
+        <Row icon={<KeyRound className="w-4 h-4" />} label="Change password" onClick={() => setSection('password')} />
+        <Row
+          icon={<ShieldCheck className="w-4 h-4" />}
+          label="Two-factor authentication"
+          onClick={() => setSection('security')}
+        />
+        <Row icon={<Download className="w-4 h-4" />} label="Download your data" hint={exporting ? 'Preparing…' : 'JSON export'} onClick={exportData} />
         <Row
           icon={<Trash2 className="w-4 h-4" />}
           label="Deactivate account"
@@ -378,14 +565,16 @@ export default function SettingsView({ onBack }: { onBack: () => void }) {
           <p className="text-xs text-neutral-500 mt-1">v0.2 · social, reimagined</p>
         </div>
         <Row icon={<FileText className="w-4 h-4" />} label="Terms of Service" onClick={() => setShowTerms(true)} />
+        <Row icon={<FileText className="w-4 h-4" />} label="Privacy Policy" onClick={() => setShowPrivacy(true)} />
+        <Row icon={<ShieldCheck className="w-4 h-4" />} label="Community Guidelines" onClick={() => setShowGuidelines(true)} />
         <Row icon={<Info className="w-4 h-4" />} label="Built by" hint="Hyder · Sarem" />
         <a
-          href="mailto:hezkiastadese@gmail.com"
+          href="mailto:hezkiastadese@gmail.com,supportsarmaxstream@gmail.com"
           className="w-full flex items-center gap-3 px-4 py-3 rounded-xl glass hover:bg-white/[0.08] text-left text-neutral-200"
         >
           <span className="text-neutral-400 text-sm">✉</span>
           <span className="text-sm font-medium flex-1">Contact support</span>
-          <span className="text-xs text-neutral-500 truncate max-w-[140px]">hezkiastadese@gmail.com</span>
+          <span className="text-xs text-neutral-500 truncate max-w-[140px]">2 addresses</span>
         </a>
       </Shell>
     );

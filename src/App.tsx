@@ -57,7 +57,7 @@ function Root() {
     return <OnboardingWizard onDone={() => setWizardDone(true)} />;
   }
 
-  return <AppShell />;
+  return <AppShell key={user.id} />;
 }
 
 export default function App() {
